@@ -1,6 +1,30 @@
 // Migrations em SQL puro, aplicadas em ordem de nome, uma transação por arquivo.
 // `run` executa SQL (pode ter vários comandos) e devolve as linhas do último: serve para pg e PGlite.
 import { readdir, readFile } from 'node:fs/promises';
+import type pg from 'pg';
+
+export type Query = (sql: string, params?: unknown[]) => Promise<any[]>;
+export type Db = { q: Query; tx: <T>(fn: (q: Query) => Promise<T>) => Promise<T> };
+
+export function pgDb(pool: pg.Pool): Db {
+  return {
+    q: async (sql, p) => (await pool.query(sql, p)).rows,
+    tx: async (fn) => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        const r = await fn(async (sql, p) => (await c.query(sql, p)).rows);
+        await c.query('COMMIT');
+        return r;
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    },
+  };
+}
 
 export const STAGES = ['novo', 'em_qualificacao', 'quente', 'em_negociacao', 'ganho', 'perdido', 'nutricao'] as const;
 

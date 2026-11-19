@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F1 em andamento** (T2 banco e T3 config + painel prontos). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2 banco, T3 config + painel e T4 motor de conversa prontos; falta T5 SLA, T6 evals, T7 replay, T9 Telegram, T10 backup). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -88,6 +88,15 @@ Anote os resultados no plano antes do F1.
 - **LLM:** `LLM_BASE_URL`, `LLM_MODEL` e `LLM_API_KEY` no `.env` (qualquer API compatível com OpenAI: 9router, Ollama `/v1`, Groq, Gemini). Sem eles, o playground fica desligado.
 - **Painel:** https://painel.localhost. Entra com o **access token do Chatwoot** (Perfil > Configurações do perfil > Token de acesso); o app nunca vê a senha. Admin e gestor veem a config (só leitura) e o playground; atendente não. O papel vem do Chatwoot, e `users_map.role` tem prioridade (é onde se define `gestor`).
 - O playground não envia nada ao cliente nem grava no banco. Com provedor não aprovado para produção, use só dados fictícios.
+
+## Motor de conversa (F1/T4)
+
+- O webhook (`/hooks/chatwoot/<segredo>`) grava o evento uma vez só (`webhook_events`) e decide: mensagem pública de humano **pausa a IA**; mensagem do cliente agenda a resposta com debounce (`debounce_s` no YAML); frase de pedido ("falar com atendente"), contato `sempre_humano` ou 2º áudio seguido viram **transbordo imediato, sem LLM**.
+- O `worker` executa a fila, que é a tabela `timers` (sem BullMQ, decisão R1): relê o estado antes de cada envio, grava `outbound_sends` antes do POST (sem duplicar em retry) e repete 5xx até 3 vezes. Falha final do LLM ou do envio = transbordo `falha_tecnica`.
+- **Lead quente** é decidido em código (campos obrigatórios do YAML + sinal de compra): a IA manda a mensagem de passagem, abre a conversa, atribui ao destino, marca urgente, põe as labels `lead-quente` e `ia-pausada` e deixa uma nota privada com a qualificação.
+- O LLM devolve JSON (`resposta`, `decisao`, `motivo`, `campos`, `sinal_compra`, `enviar_produtos`). Transferência sem motivo da lista é ignorada. Foto de produto sai pela ferramenta `enviar_produtos`, e a IA só fala "enviei" depois da confirmação (`message_updated` com `source_id`).
+- Tokens no `.env`: `CHATWOOT_BOT_TOKEN` (mensagens públicas) e `CHATWOOT_ADMIN_TOKEN` (nota, atribuição, labels, status).
+- Agente `status: live` no YAML exige `LLM_APPROVED_FOR_PRODUCTION=true`; sem isso o worker não sobe.
 
 ## Testes
 

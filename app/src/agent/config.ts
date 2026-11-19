@@ -12,6 +12,7 @@ const DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const;
 const Agent = z.object({
   nome_interno: z.string().min(1),          // ex.: "Vendas" (no painel)
   inbox_ids: z.array(z.number().int()).default([]),
+  status: z.enum(['teste', 'live']).default('teste'),   // live exige LLM aprovado para produção (regra 10)
 
   // Etapa 1: comportamento e tom de voz
   comportamento: z.object({
@@ -48,6 +49,7 @@ const Agent = z.object({
       msg_passagem: z.string().min(1),
       msg_espera: z.string().min(1),
       msg_falha: z.string().default('Já vou te passar para um atendente.'),
+      msg_pedir_texto: z.string().default('Consegue me mandar por escrito? Assim te respondo mais rápido.'),
     }),
   }),
 

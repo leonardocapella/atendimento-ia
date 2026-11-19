@@ -7,8 +7,8 @@ import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { systemPrompt, type Config } from './agent/config.ts';
 import { llmEnv, type Chat } from './agent/llm.ts';
+import type { Query } from './db.ts';
 
-export type Query = (sql: string, params?: unknown[]) => Promise<any[]>;
 type Profile = { id: number; accounts: { id: number; role: string }[] };
 export type PanelDeps = {
   query: Query;
