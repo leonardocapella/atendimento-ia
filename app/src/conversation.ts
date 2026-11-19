@@ -9,16 +9,26 @@ import type { Db, Query } from './db.ts';
 export type ConvDeps = { db: Db; cfg: Config; tenantId: number; pausarNoTransbordo?: boolean; iaLigada?: () => boolean };
 const norm = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
-// Etiqueta ia-pausada posta por humano pausa esta conversa. Tirada, a Malu volta.
+// Etiqueta ia-pausada posta por humano pausa esta conversa.
+// Removida: limpa pausa e handoff. O worker não recoloca a etiqueta.
 async function applyLabel(q: Query, d: ConvDeps, conv: number, labels: string[]): Promise<string> {
   const pausa = labels.includes(PAUSE_LABEL);
   const agentKey = Object.keys(d.cfg.agentes)[0] ?? 'vendas';
-  await q(`INSERT INTO conversation_state (tenant_id, chatwoot_conversation_id, agent_key, ia_pausada, pausa_motivo)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (tenant_id, chatwoot_conversation_id) DO UPDATE SET ia_pausada = $4, pausa_motivo = $5`,
+  await q(`INSERT INTO conversation_state (tenant_id, chatwoot_conversation_id, agent_key, ia_pausada, pausa_motivo, ia_retomada_em)
+           VALUES ($1, $2, $3, $4, $5, CASE WHEN $4 THEN NULL ELSE now() END)
+           ON CONFLICT (tenant_id, chatwoot_conversation_id) DO UPDATE SET
+             ia_pausada = $4,
+             pausa_motivo = $5,
+             ia_retomada_em = CASE WHEN $4 THEN NULL ELSE now() END`,
     [d.tenantId, conv, agentKey, pausa, pausa ? 'etiqueta' : null]);
-  if (pausa) await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind = 'reply' AND ref_id = $2 AND done_at IS NULL`, [d.tenantId, conv]);
-  return pausa ? 'pausada' : 'retomada';
+  if (pausa) {
+    await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind = 'reply' AND ref_id = $2 AND done_at IS NULL`, [d.tenantId, conv]);
+    return 'pausada';
+  }
+  const hs = await q(`UPDATE handoff_events SET encerrado_em = coalesce(encerrado_em, now())
+                      WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND encerrado_em IS NULL RETURNING id`, [d.tenantId, conv]);
+  if (hs.length) await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind IN ('handoff', 'sla1', 'sla2', 'msg_espera') AND ref_id = ANY($2) AND done_at IS NULL`, [d.tenantId, hs.map((h) => h.id)]);
+  return 'retomada';
 }
 
 export async function ensureTenant(q: Query, accountId: number): Promise<number> {

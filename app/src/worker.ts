@@ -225,8 +225,9 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   if (st.lead_id) await d.db.q(`UPDATE leads SET qualificacao = $3, sinal_compra = $4,
       estagio = CASE WHEN estagio = 'novo' THEN 'em_qualificacao' ELSE estagio END WHERE tenant_id = $1 AND id = $2`, [T, st.lead_id, JSON.stringify(todos), sinal]);
 
-  // lead quente é decidido em código: a mensagem de passagem substitui a resposta do LLM
-  if (isHot(agent, todos, sinal)) {
+  // lead quente é decidido em código: a mensagem de passagem substitui a resposta do LLM.
+  // Retomada manual (humano tirou ia-pausada) não abre outro handoff: senão a etiqueta volta.
+  if (!st.ia_retomada_em && isHot(agent, todos, sinal)) {
     if (await stale()) return 'descartada';
     await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: 'lead_quente', msg: tb.msg_passagem, agent, snapshot: todos, labels: ['lead-quente'], pausar: d.pausarNoTransbordo }));
     return 'transbordo (lead quente)';
@@ -249,12 +250,14 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
 export async function runHandoff(d: WorkerDeps, hId: number): Promise<string> {
   const [h] = await d.db.q(`SELECT * FROM handoff_events WHERE tenant_id = $1 AND id = $2`, [d.tenantId, hId]);
   if (!h) return 'não existe';
+  if (h.encerrado_em) return 'retomada';
   const conv = Number(h.chatwoot_conversation_id), snap = h.snapshot ?? {};
+  const [st] = await d.db.q(`SELECT ia_pausada, ia_retomada_em FROM conversation_state WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [d.tenantId, conv]);
   if (snap._msg) await sendOnce(d, conv, hId, 'handoff', snap._msg).catch((e) => d.log?.error({ err: e.message }, 'mensagem de passagem falhou'));
   await d.cw.open(conv);
   await d.cw.assign(conv, { user_id: h.para_user_id ?? undefined, team_id: h.para_team_id ?? undefined });
-  const extra = [...(snap._labels ?? [])];
-  if (pausarNoTransbordo()) extra.unshift(PAUSE_LABEL);
+  const extra = [...(snap._labels ?? [])].filter((l: string) => l !== PAUSE_LABEL);
+  if ((d.pausarNoTransbordo ?? pausarNoTransbordo()) && st?.ia_pausada && !st.ia_retomada_em) extra.unshift(PAUSE_LABEL);
   if (extra.length) await d.cw.addLabels(conv, extra);
   if (h.motivo === 'lead_quente') await d.cw.urgent(conv);
 

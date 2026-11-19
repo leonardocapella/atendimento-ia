@@ -55,11 +55,11 @@ test('schema: dedupe de webhook e de envio', async () => {
 test('rollback: desfaz a última migration e migrate reaplica', async () => {
   const { db, run } = await fresh();
   await migrate(run);
-  assert.equal(await rollback(run), '003_revisao.sql');
-  assert.equal((await db.query("SELECT name FROM schema_migrations ORDER BY name")).rows.map((r: any) => r.name).at(-1), '002_t4.sql');
-  const cols = await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'handoff_events' AND column_name = 'encerrado_em'");
+  assert.equal(await rollback(run), '004_retomada.sql');
+  assert.equal((await db.query("SELECT name FROM schema_migrations ORDER BY name")).rows.map((r: any) => r.name).at(-1), '003_revisao.sql');
+  const cols = await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'conversation_state' AND column_name = 'ia_retomada_em'");
   assert.equal(cols.rows.length, 0);
-  assert.deepEqual(await migrate(run), ['003_revisao.sql']);
+  assert.deepEqual(await migrate(run), ['004_retomada.sql']);
 });
 
 test('migrate: SQL quebrado não deixa migration pela metade', async () => {

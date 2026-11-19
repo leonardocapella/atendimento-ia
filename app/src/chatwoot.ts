@@ -24,12 +24,21 @@ export type Ev =
   | { kind: 'conv_status'; key: string; account?: number; conv: number; status: string }
   | { kind: 'labels'; key: string; account?: number; conv: number; labels: string[] };
 
-// conversation_updated traz a lista atual, ou changed_attributes.labels = [antes, depois].
+function asLabels(v: unknown): string[] | null {
+  return Array.isArray(v) ? v.map(String) : null;
+}
+
+// Chatwoot manda a lista atual em `labels`, ou changed_attributes como array de { labels: { current_value } }.
 export function labelList(b: any): string[] | null {
-  if (Array.isArray(b?.labels)) return b.labels.map(String);
-  const ch = b?.changed_attributes?.labels;
-  if (Array.isArray(ch?.[1])) return ch[1].map(String);
-  if (Array.isArray(ch?.current_value)) return ch.current_value.map(String);
+  const top = asLabels(b?.labels);
+  if (top) return top;
+  const raw = b?.changed_attributes;
+  const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  for (const item of items) {
+    const box = item?.labels ?? item?.label_list;
+    const cur = asLabels(box?.current_value) ?? asLabels(box?.[1]);
+    if (cur) return cur;
+  }
   return null;
 }
 
@@ -47,12 +56,13 @@ export function parseEvent(b: any): Ev | null {
     const delivered = Boolean(b.source_id), failed = b.status === 'failed';
     return { kind: 'msg_status', key: `upd:${b.id}:${b.status}:${delivered}`, account, id: b.id, delivered, failed };
   }
-  if ((b?.event === 'conversation_status_changed' || b?.event === 'conversation_updated') && b.id && b.status)
-    return { kind: 'conv_status', key: `conv:${b.id}:${b.status}:${b.updated_at ?? ''}`, account, conv: b.id, status: b.status };
+  // Etiqueta vem no mesmo conversation_updated que o status. A lista ganha: senão a remoção se perde.
   if (b?.event === 'conversation_updated' && b.id) {
     const labels = labelList(b);
     if (labels) return { kind: 'labels', key: `lbl:${b.id}:${[...labels].sort().join(',')}:${b.updated_at ?? ''}`, account, conv: b.id, labels };
   }
+  if ((b?.event === 'conversation_status_changed' || b?.event === 'conversation_updated') && b.id && b.status)
+    return { kind: 'conv_status', key: `conv:${b.id}:${b.status}:${b.updated_at ?? ''}`, account, conv: b.id, status: b.status };
   return null;
 }
 

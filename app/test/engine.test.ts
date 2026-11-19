@@ -9,7 +9,7 @@ import { onEvent, ensureTenant } from '../src/conversation.ts';
 import { claim, intencaoClara, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
 import { inHours, nextOpen } from '../src/hours.ts';
 import { validName, parseOut, buildMessages, capFrases, guardReply, fullSystem, primeiraFala } from '../src/agent/prompt.ts';
-import { HttpError, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
+import { HttpError, labelList, parseEvent, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
 import type { Msg } from '../src/agent/llm.ts';
 
 const CONV = 50, CONTACT = 900;
@@ -289,6 +289,37 @@ test('IA_ATIVA desliga todas as conversas sem reiniciar', async () => {
   assert.equal(await s.customer('oi'), 'ia desligada');
   await s.drain();
   assert.equal(s.prompts.length, 0);
+});
+
+test('tirar ia-pausada retoma e o handoff do lead quente não recoloca', async () => {
+  const campos = { interesse: 'armário', prazo: '2026-12-01', cidade: 'Curitiba' };
+  const s = await setup({ replies: [out({ campos, sinal_compra: true, resposta: 'passo' }), out({ resposta: 'Sigo aqui.' })] });
+  s.deps.pausarNoTransbordo = true;
+  await s.customer('quero fechar o armário para dezembro em Curitiba');
+  await s.drain();
+  assert.equal((await s.state()).ia_pausada, true);
+  assert.ok(s.fake.calls.some((c) => c.includes('ia-pausada')));
+
+  const n = s.fake.calls.length;
+  assert.equal(await onEvent(s.conv, { event: 'conversation_updated', account: { id: 1 }, id: CONV, status: 'open',
+    labels: ['lead-quente'], changed_attributes: [{ labels: { previous_value: ['ia-pausada', 'lead-quente'], current_value: ['lead-quente'] } }], updated_at: 'tira' }), 'retomada');
+  assert.equal((await s.state()).ia_pausada, false);
+  assert.ok((await s.state()).ia_retomada_em);
+  assert.ok((await s.q(`SELECT encerrado_em FROM handoff_events`))[0].encerrado_em);
+
+  await s.q(`UPDATE timers SET due_at = now(), locked_until = NULL, done_at = NULL WHERE kind = 'handoff'`);
+  await s.drain();
+  assert.ok(!s.fake.calls.slice(n).some((c) => c.includes('ia-pausada')));
+  await s.customer('e o prazo?'); await s.drain();
+  assert.equal((await s.handoffs()).length, 1);
+  assert.match(s.outgoing().at(-1)!.content!, /Sigo aqui/);
+});
+
+test('webhook do Chatwoot: lista de etiquetas ganha do status', () => {
+  const body = { event: 'conversation_updated', id: 9, status: 'open', updated_at: '1',
+    changed_attributes: [{ labels: { previous_value: ['ia-pausada'], current_value: [] } }] };
+  assert.deepEqual(labelList(body), []);
+  assert.equal(parseEvent(body)?.kind, 'labels');
 });
 
 test('frase de pedido: transbordo imediato sem LLM', async () => {
