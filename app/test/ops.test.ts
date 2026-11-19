@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { alertFromEnv, whatsappAlert } from '../src/alert.ts';
 import { ping } from '../src/monitor.ts';
+import { shouldPing } from '../src/worker.ts';
 
 test('whatsapp: sem número não envia; com a instância manda só ao gestor e corta em 4000', async () => {
   assert.equal(alertFromEnv({}), null);
@@ -27,4 +28,10 @@ test('ping: URL vazia não chama a rede; falha de rede não derruba', async () =
   assert.equal(n, 0);
   assert.equal(await ping('https://hc.example/x', fetchFn as typeof fetch), true);
   assert.equal(await ping('https://hc.example/x', (async () => { throw new Error('rede'); }) as typeof fetch), false);
+});
+
+test('shouldPing: no máximo 1 por minuto, mesmo com fila cheia', () => {
+  assert.equal(shouldPing(0, 0), true);
+  assert.equal(shouldPing(1_000, 30_000), false);
+  assert.equal(shouldPing(1_000, 61_000), true);
 });

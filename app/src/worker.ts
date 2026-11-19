@@ -13,6 +13,11 @@ import { alertFromEnv, type Alert } from './alert.ts';
 import { ping } from './monitor.ts';
 import type { Db } from './db.ts';
 
+// Healthcheck no máximo a cada 60s, com ou sem job. Fila cheia não pode calar o monitor.
+export function shouldPing(lastMs: number, nowMs: number, everyMs = 60_000): boolean {
+  return lastMs <= 0 || nowMs - lastMs >= everyMs; // 0 = nunca pingou
+}
+
 export type WorkerDeps = {
   db: Db; cfg: Config; hash: string; tenantId: number; cw: Chatwoot; chat?: Chat;
   llm: { provider: string; model: string };
@@ -350,13 +355,15 @@ if (import.meta.main) {
   let running = true;
   for (const s of ['SIGTERM', 'SIGINT'] as const) process.once(s, () => { running = false; });
   log.info({ tenant: deps.tenantId, config: hash }, 'worker no ar');
+  let lastPing = 0;
   while (running) {
     const jobs = await claim(db).catch((e) => (log.error({ err: e.message }, 'claim falhou'), []));
     await Promise.all(jobs.map((t) => runJob(deps, t)));
-    if (!jobs.length) {
+    if (shouldPing(lastPing, Date.now())) {
+      lastPing = Date.now();
       await ping(process.env.HEALTHCHECK_URL ?? '');
-      await sleep(1000);
     }
+    if (!jobs.length) await sleep(1000);
   }
   await pool.end();
 }
