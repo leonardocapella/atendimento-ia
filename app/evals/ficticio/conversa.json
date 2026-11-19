@@ -1,0 +1,13 @@
+{
+  "ficticio": true,
+  "aviso": "FICTÍCIO. Não é conversa do FabChat. O rótulo humano do turno de handoff entra quando o Lorenzo marcar as 30 conversas.",
+  "id": "ficticia-1",
+  "turno_handoff_humano": 4,
+  "turnos": [
+    { "i": 1, "quem": "cliente", "texto": "Oi, quero orçamento de armário" },
+    { "i": 2, "quem": "ia", "texto": "Oi! Eu sou a Malu, da EBM. Qual móvel você procura?" },
+    { "i": 3, "quem": "cliente", "texto": "Armário de aço, para semana que vem, em Brasília. Pode mandar proposta." },
+    { "i": 4, "quem": "ia", "texto": "Vou te passar para o Lorenzo.", "handoff": true },
+    { "i": 5, "quem": "cliente", "texto": "Combinado" }
+  ]
+}
