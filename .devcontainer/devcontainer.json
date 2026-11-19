@@ -1,0 +1,27 @@
+{
+  // Codespace de teste: sobe Chatwoot + Evolution (WhatsApp por QR) + app com Gemini.
+  // Depois de abrir: bash scripts/codespace-up.sh
+  "name": "atendimento-ia (teste)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "24" }
+  },
+  // 2 núcleos/8 GB dão conta e gastam metade das horas grátis de uma máquina de 4 núcleos
+  "hostRequirements": { "memory": "8gb", "storage": "32gb" },
+  "secrets": {
+    "GEMINI_API_KEY": { "description": "Chave do Google AI Studio (Gemini, plano grátis)" }
+  },
+  "forwardPorts": [3000, 8080, 8081],
+  "portsAttributes": {
+    "3000": { "label": "Chatwoot", "onAutoForward": "notify" },
+    "8080": { "label": "Evolution (QR em /manager)", "onAutoForward": "silent" },
+    "8081": { "label": "Painel do app", "onAutoForward": "silent" }
+  },
+  "postCreateCommand": "chmod +x scripts/codespace-up.sh",
+  // Volta a subir os containers quando o Codespace acorda (só se o .env já existir)
+  "postStartCommand": "bash scripts/codespace-up.sh --retomar",
+  "customizations": {
+    "codespaces": { "openFiles": ["docs/CODESPACE.md"] }
+  }
+}
