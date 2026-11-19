@@ -8,7 +8,7 @@ import { loadConfig, type Config } from '../src/agent/config.ts';
 import { onEvent, ensureTenant } from '../src/conversation.ts';
 import { claim, intencaoClara, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
 import { inHours, nextOpen } from '../src/hours.ts';
-import { validName, parseOut, buildMessages, capFrases, guardReply, fullSystem } from '../src/agent/prompt.ts';
+import { validName, parseOut, buildMessages, capFrases, guardReply, fullSystem, primeiraFala } from '../src/agent/prompt.ts';
 import { HttpError, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
 import type { Msg } from '../src/agent/llm.ts';
 
@@ -243,6 +243,23 @@ test('prévia: preço não transfere; transferir com pergunta vira resposta; nom
 
   const sysCfg = fullSystem(s.config.agentes.vendas, { nome: 'Carla', apresentou: false, foraDoHorario: false, campos: {}, produtos: [] });
   assert.match(sysCfg, /não pergunte como chamar/i);
+});
+
+test('primeira fala: cliente já disse o móvel = apresentação e próxima pergunta, nunca como posso te ajudar', async () => {
+  const ruim = 'Olá, Lorenzo! Eu sou a Malu, da EBM. Como posso te ajudar?';
+  assert.equal(primeiraFala(ruim, 'Opa, qro comprar um armário', 'Você tem as medidas do ambiente?'),
+    'Olá, Lorenzo! Eu sou a Malu, da EBM. Você tem as medidas do ambiente?');
+  assert.equal(primeiraFala('Oi! Como posso te ajudar?', 'Oi', 'Qual móvel você procura?'), 'Oi! Como posso te ajudar?');
+
+  const s = await setup({ replies: [out({ resposta: ruim, campos: { interesse: 'armário' } })] });
+  await s.customer('Opa, qro comprar um armário', { name: 'Lorenzo' });
+  await s.drain();
+  const text = s.outgoing().at(-1)!.content!;
+  assert.doesNotMatch(text, /como posso te ajudar/i);
+  assert.match(text, /Malu/);
+  assert.match(text, /medidas do ambiente/);
+  assert.match(s.prompts[0][0].content as string, /já disse o que quer/);
+  assert.deepEqual(await s.handoffs(), []);
 });
 
 test('frase de pedido: transbordo imediato sem LLM', async () => {

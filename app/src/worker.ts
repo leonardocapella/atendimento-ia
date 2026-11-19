@@ -4,7 +4,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HttpError, type Chatwoot, type CwMsg } from './chatwoot.ts';
 import { startHandoff } from './conversation.ts';
-import { buildMessages, currentTurn, fullSystem, guardReply, MOTIVOS_LLM, parseOut, validName, type Ctx, type Out } from './agent/prompt.ts';
+import { buildMessages, currentTurn, fullSystem, guardReply, MOTIVOS_LLM, parseOut, primeiraFala, validName, type Ctx, type Out } from './agent/prompt.ts';
 import type { AgentConfig, Config } from './agent/config.ts';
 import { inHours, nextOpen } from './hours.ts';
 export { inHours };
@@ -214,6 +214,10 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   const chaves = new Set(agent.regras.perguntas_qualificacao.map((p) => p.chave));
   const novos = Object.fromEntries(Object.entries(out.campos).filter(([k, v]) => chaves.has(k) && v != null && v !== ''));
   const todos = { ...campos, ...novos };
+  if (!st.apresentou_em) {
+    const proxima = agent.regras.perguntas_qualificacao.find((p) => todos[p.chave] == null || todos[p.chave] === '')?.pergunta ?? '';
+    out = { ...out, resposta: primeiraFala(out.resposta, turn.map((m) => m.content ?? '').join('\n'), proxima) };
+  }
   const sinal = Boolean(st.sinal_compra) || (out.sinal_compra && intencaoClara(turn.map((m) => m.content ?? '').join('\n')));
   if (st.lead_id) await d.db.q(`UPDATE leads SET qualificacao = $3, sinal_compra = $4,
       estagio = CASE WHEN estagio = 'novo' THEN 'em_qualificacao' ELSE estagio END WHERE tenant_id = $1 AND id = $2`, [T, st.lead_id, JSON.stringify(todos), sinal]);

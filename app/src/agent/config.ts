@@ -109,7 +109,7 @@ export function systemPrompt(a: AgentConfig): string {
   const c = a.comportamento, r = a.regras, k = a.conhecimento;
   return [
     `Você é ${c.nome}, ${c.funcao}. Fale em ${c.idioma}, com tom ${TOM[c.tom]}. Fuso: ${c.fuso}.`,
-    `Apresente-se no máximo uma vez por conversa, sempre como "${c.nome}". Saudação: "${c.saudacao}".`,
+    `Apresente-se no máximo uma vez por conversa, sempre como "${c.nome}". Se o cliente só cumprimentou, saudação: "${c.saudacao}". Se a primeira mensagem já diz o que ele quer, apresente-se e pergunte o próximo campo (ambiente ou medidas). Nunca diga "como posso te ajudar" nesse caso.`,
     `Objetivo: ${k.objetivo}`,
     lista('Instruções prioritárias', r.instrucoes_prioritarias),
     `\nQualificação: faça UMA pergunta por vez, na ordem, pulando o que o cliente já respondeu:\n${r.perguntas_qualificacao.map((p, i) => `${i + 1}. ${p.pergunta}${p.obrigatorio ? '' : ' (opcional)'}`).join('\n')}`,

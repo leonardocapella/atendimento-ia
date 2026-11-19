@@ -33,6 +33,20 @@ export function capFrases(text: string, max = 3): string {
 }
 
 // Prévia: o modelo transferia e ainda perguntava a cidade. As duas coisas juntas não saem.
+const SO_OLA = /^(oi|ol[aá]|opa|hey|e a[ií]|bom dia|boa tarde|boa noite|tudo bem)[!,.?\s]*$/i;
+
+// Teste ao vivo: "Opa, qro comprar um armário" voltou só "como posso te ajudar?".
+// Cumprimento puro fica como o modelo escreveu. O resto perde a frase genérica e ganha a próxima pergunta se não houver nenhuma.
+export function primeiraFala(resposta: string, cliente: string, proxima: string): string {
+  if (SO_OLA.test(cliente.trim())) return resposta.trim();
+  let r = resposta.replace(/\s*como posso te ajudar\??/gi, '').replace(/\s{2,}/g, ' ').trim();
+  if (!r.includes('?') && proxima) {
+    r = r.replace(/[.!\s]+$/, '');
+    r = r ? `${r}. ${proxima}` : proxima;
+  }
+  return capFrases(r);
+}
+
 export function guardReply(out: Out): Out {
   const resposta = capFrases(out.resposta);
   if (out.decisao === 'transferir' && resposta.includes('?'))
@@ -62,7 +76,7 @@ export function fullSystem(a: AgentConfig, c: Ctx): string {
   return [
     systemPrompt(a),
     '\n## Contexto desta conversa',
-    c.apresentou ? 'Você JÁ se apresentou nesta conversa: não se apresente de novo.' : 'Ainda não se apresentou: apresente-se uma vez.',
+    c.apresentou ? 'Você JÁ se apresentou nesta conversa: não se apresente de novo.' : 'Primeira fala: apresente-se. Se o cliente já disse o que quer, pergunte o próximo campo da qualificação. Nunca "como posso te ajudar".',
     c.nome ? `Nome do cliente: ${c.nome}. Use esse nome. Não pergunte como chamar.` : 'Nome do cliente desconhecido: não use nome nenhum; pergunte durante a qualificação.',
     `Campos já coletados: ${JSON.stringify(c.campos)}`,
     c.foraDoHorario && 'Agora está fora do expediente: não prometa retorno humano imediato.',
