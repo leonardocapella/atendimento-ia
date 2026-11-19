@@ -4,7 +4,7 @@ import Redis from 'ioredis';
 import { secretOk, eventMeta } from './hooks.ts';
 import { panel, chatwootProfile, type PanelDeps } from './panel.ts';
 import { loadConfig } from './agent/config.ts';
-import { llmEnv, openaiChat } from './agent/llm.ts';
+import { llmEnv, llmTargets, withFallback } from './agent/llm.ts';
 import { pgDb } from './db.ts';
 import { onEvent, ensureTenant } from './conversation.ts';
 
@@ -38,7 +38,7 @@ export function buildApp(deps?: { pingDb: Ping; pingRedis: Ping; panel?: PanelDe
     const panelDeps: PanelDeps = {
       query: pdb.q,
       config,
-      chat: llm.baseUrl && llm.model ? openaiChat(llm.baseUrl, llm.model, process.env.LLM_API_KEY) : undefined,
+      chat: withFallback(llmTargets()),
       fetchProfile: chatwootProfile,
     };
     app.register(async (i) => panel(i, panelDeps));

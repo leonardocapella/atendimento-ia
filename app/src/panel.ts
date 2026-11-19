@@ -93,10 +93,10 @@ export async function panel(app: FastifyInstance, deps: PanelDeps) {
 
   // Só leitura no F1: editar = mudar config/ebm.yaml e reiniciar (D3).
   app.get('/api/config', { preHandler: auth(['admin', 'gestor']) }, async () => {
-    const { config, hash } = deps.config, llm = llmEnv();
+    const { config, hash } = deps.config, llm = llmEnv(), fb = process.env.LLM_FALLBACK_MODEL ?? '';
     return {
       versao: hash,
-      llm: { configurado: Boolean(deps.chat), base_url: llm.baseUrl, modelo: llm.model, aprovado_para_producao: llm.approved },
+      llm: { configurado: Boolean(deps.chat), base_url: llm.baseUrl, modelo: llm.model, fallback: fb, aprovado_para_producao: llm.approved },
       agentes: Object.fromEntries(Object.entries(config.agentes).map(([k, a]) => [k, { ...a, prompt: systemPrompt(a) }])),
     };
   });

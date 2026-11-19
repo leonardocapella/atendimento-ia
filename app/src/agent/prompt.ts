@@ -23,6 +23,23 @@ export function parseOut(text: string): Out {
   return Out.parse(JSON.parse(json));
 }
 
+// Primeiras frases. Se a pergunta ficou depois do corte, ela entra no lugar da última.
+export function capFrases(text: string, max = 3): string {
+  const parts = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length <= max) return text.trim();
+  const q = parts.findIndex((p) => p.includes('?'));
+  const kept = q >= max ? [...parts.slice(0, max - 1), parts[q]] : parts.slice(0, max);
+  return kept.join(' ');
+}
+
+// Prévia: o modelo transferia e ainda perguntava a cidade. As duas coisas juntas não saem.
+export function guardReply(out: Out): Out {
+  const resposta = capFrases(out.resposta);
+  if (out.decisao === 'transferir' && resposta.includes('?'))
+    return { ...out, resposta, decisao: 'responder', motivo: null };
+  return { ...out, resposta };
+}
+
 // RQ3: nome do perfil só se parecer nome de pessoa.
 export function validName(n?: string | null): string | null {
   const full = (n ?? '').trim(), first = full.split(/\s+/)[0] ?? '';
@@ -46,7 +63,7 @@ export function fullSystem(a: AgentConfig, c: Ctx): string {
     systemPrompt(a),
     '\n## Contexto desta conversa',
     c.apresentou ? 'Você JÁ se apresentou nesta conversa: não se apresente de novo.' : 'Ainda não se apresentou: apresente-se uma vez.',
-    c.nome ? `Nome do cliente: ${c.nome}.` : 'Nome do cliente desconhecido: não use nome nenhum; pergunte durante a qualificação.',
+    c.nome ? `Nome do cliente: ${c.nome}. Use esse nome. Não pergunte como chamar.` : 'Nome do cliente desconhecido: não use nome nenhum; pergunte durante a qualificação.',
     `Campos já coletados: ${JSON.stringify(c.campos)}`,
     c.foraDoHorario && 'Agora está fora do expediente: não prometa retorno humano imediato.',
     c.produtos.length && `\nProdutos (código | nome | preço | disponível):\n${c.produtos.map((p) => `${p.codigo} | ${p.nome} | ${brl(p.preco_centavos)} | ${p.disponivel ? 'sim' : 'não'}`).join('\n')}`,
@@ -57,8 +74,8 @@ export function fullSystem(a: AgentConfig, c: Ctx): string {
     `\n## Formato da resposta
 Responda SOMENTE com um JSON:
 {"resposta": "texto para o cliente", "decisao": "responder" | "transferir", "motivo": null | ${MOTIVOS_LLM.map((m) => `"${m}"`).join(' | ')}, "justificativa": null | "por quê",
- "campos": {${chaves.map((k) => `"${k}": valor ou null`).join(', ')}}, "sinal_compra": true se o cliente quer comprar/orçamento, "enviar_produtos": ["código"]}
-Transfira só por um dos motivos da lista. Mesmo transferindo, escreva a resposta ao cliente.`,
+ "campos": {${chaves.map((k) => `"${k}": valor ou null`).join(', ')}}, "sinal_compra": true só se o cliente quer fechar, proposta ou orçamento (medidas, prazo ou "quanto custa" não bastam), "enviar_produtos": ["código"]}
+Pedido de preço não é transbordo. Transfira só por um motivo da lista. Nunca transfira e faça uma pergunta na mesma fala: se falta campo, decisao é responder. No máximo 3 frases.`,
   ].filter(Boolean).join('\n');
 }
 

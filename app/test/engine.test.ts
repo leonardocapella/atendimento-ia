@@ -6,9 +6,9 @@ import { PGlite } from '@electric-sql/pglite';
 import { migrate, type Db, type Query } from '../src/db.ts';
 import { loadConfig, type Config } from '../src/agent/config.ts';
 import { onEvent, ensureTenant } from '../src/conversation.ts';
-import { claim, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
+import { claim, intencaoClara, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
 import { inHours, nextOpen } from '../src/hours.ts';
-import { validName, parseOut, buildMessages } from '../src/agent/prompt.ts';
+import { validName, parseOut, buildMessages, capFrases, guardReply, fullSystem } from '../src/agent/prompt.ts';
 import { HttpError, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
 import type { Msg } from '../src/agent/llm.ts';
 
@@ -209,6 +209,40 @@ test('lead quente (critério em código): transbordo para o Lorenzo uma vez, com
   await s.human('Oi, sou o Lorenzo');
   assert.ok((await s.q(`SELECT primeira_resposta_em FROM handoff_events`))[0].primeira_resposta_em);
   assert.equal((await s.q(`SELECT estagio FROM leads`))[0].estagio, 'em_negociacao');
+});
+
+test('prévia: preço não transfere; transferir com pergunta vira resposta; nome do perfil entra; sinal exige intenção', async () => {
+  assert.equal(intencaoClara('Quanto fica mais ou menos o preço?'), false);
+  assert.equal(intencaoClara('As medidas são 2,80 m. Preciso para janeiro.'), false);
+  assert.equal(intencaoClara('Pode mandar a proposta, quero fechar'), true);
+
+  const longo = 'Frase um. Frase dois. Frase três. Frase quatro?';
+  assert.equal(capFrases(longo).split(/(?<=[.!?])\s+/).length, 3);
+  assert.match(capFrases(longo), /quatro\?$/);
+  assert.equal(capFrases('Uma. Duas.'), 'Uma. Duas.');
+
+  const cortado = guardReply({ resposta: 'Vou te passar. Qual a cidade?', decisao: 'transferir', motivo: 'pedido_cliente', campos: {}, sinal_compra: true, enviar_produtos: [] });
+  assert.equal(cortado.decisao, 'responder');
+  assert.equal(cortado.motivo, null);
+  const ok = guardReply({ resposta: 'Vou te passar para o consultor.', decisao: 'transferir', motivo: 'pedido_cliente', campos: {}, sinal_compra: false, enviar_produtos: [] });
+  assert.equal(ok.decisao, 'transferir');
+
+  const s = await setup({ replies: [out({ decisao: 'transferir', motivo: 'pedido_cliente', sinal_compra: true, resposta: 'Entendi. Vou te passar. Qual a cidade?', campos: { interesse: 'armário', medidas: '2,80 m', prazo: 'janeiro' } })] });
+  await s.customer('Preciso para janeiro. Quanto fica mais ou menos o preço?', { name: 'Carla Mendes' });
+  await s.drain();
+  assert.deepEqual(await s.handoffs(), []);
+  assert.equal((await s.state()).ia_pausada, false);
+  const sys = s.prompts[0][0].content as string;
+  assert.match(sys, /Nome do cliente: Carla/);
+  assert.match(sys, /Pedido de preço não é transbordo/);
+  assert.match(sys, /No máximo 3 frases/);
+  const lead = (await s.q(`SELECT qualificacao, sinal_compra FROM leads`))[0];
+  assert.equal(lead.qualificacao.nome, 'Carla');
+  assert.equal(lead.sinal_compra, false);
+  assert.equal((s.outgoing().at(-1)!.content!.match(/\?/g) ?? []).length, 1);
+
+  const sysCfg = fullSystem(s.config.agentes.vendas, { nome: 'Carla', apresentou: false, foraDoHorario: false, campos: {}, produtos: [] });
+  assert.match(sysCfg, /não pergunte como chamar/i);
 });
 
 test('frase de pedido: transbordo imediato sem LLM', async () => {

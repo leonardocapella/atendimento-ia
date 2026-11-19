@@ -4,7 +4,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { HttpError, type Chatwoot, type CwMsg } from './chatwoot.ts';
 import { startHandoff } from './conversation.ts';
-import { buildMessages, currentTurn, fullSystem, MOTIVOS_LLM, parseOut, validName, type Ctx, type Out } from './agent/prompt.ts';
+import { buildMessages, currentTurn, fullSystem, guardReply, MOTIVOS_LLM, parseOut, validName, type Ctx, type Out } from './agent/prompt.ts';
 import type { AgentConfig, Config } from './agent/config.ts';
 import { inHours, nextOpen } from './hours.ts';
 export { inHours };
@@ -49,6 +49,11 @@ export function isHot(a: AgentConfig, campos: Record<string, unknown>, sinal: bo
   return lq.campos_obrigatorios.every((k) => campos[k] != null && campos[k] !== '') && (!lq.exige_sinal_compra || sinal);
 }
 
+// Medidas, prazo e "quanto custa" não contam. O modelo pode marcar; o código só aceita com estas palavras.
+export function intencaoClara(texto: string): boolean {
+  return /\b(fechar|proposta|or[cç]amento|comprar|contratar)\b/i.test(texto);
+}
+
 // Regra 4: grava antes de enviar; numa repetição, procura o brain_send_id no Chatwoot antes de reenviar.
 async function sendOnce(d: WorkerDeps, conv: number, trigger: number, kind: string, content: string, file?: { url: string; name: string }) {
   // ON CONFLICT DO NOTHING: RETURNING só volta se inseriu. xmax=0 mente depois de ON CONFLICT DO UPDATE no Postgres.
@@ -82,7 +87,7 @@ async function waitDelivery(d: WorkerDeps, conv: number, trigger: number, kind: 
 async function ask(chat: Chat, msgs: Parameters<Chat>[0]): Promise<Out> {
   let last: unknown;
   for (let i = 0; i < 2; i++) {   // regra 5: 2 tentativas (o timeout de 30 s fica no cliente)
-    try { return parseOut(await chat(msgs, { json: true })); } catch (e) { last = e; }
+    try { return guardReply(parseOut(await chat(msgs, { json: true }))); } catch (e) { last = e; }
   }
   throw last;
 }
@@ -162,10 +167,11 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
     return r;
   }
 
-  const campos: Record<string, unknown> = st.qualificacao ?? {};
+  const campos: Record<string, unknown> = { ...(st.qualificacao ?? {}) };
+  if (!campos.nome) { const perfil = validName(turn.at(-1)?.sender?.name); if (perfil) campos.nome = perfil; }
   const produtos = await d.db.q(`SELECT codigo, nome, preco_centavos, disponivel, imagem_url FROM products WHERE tenant_id = $1 ORDER BY codigo LIMIT 200`, [T]);
   const ctx: Ctx = {
-    nome: (campos.nome as string) || validName(turn.at(-1)?.sender?.name), apresentou: Boolean(st.apresentou_em),
+    nome: (campos.nome as string) || null, apresentou: Boolean(st.apresentou_em),
     foraDoHorario: !aberto, campos, produtos,
   };
   const images = new Map<number, string>();
@@ -207,7 +213,8 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   // qualificação: só campos conhecidos e não vazios entram no lead
   const chaves = new Set(agent.regras.perguntas_qualificacao.map((p) => p.chave));
   const novos = Object.fromEntries(Object.entries(out.campos).filter(([k, v]) => chaves.has(k) && v != null && v !== ''));
-  const todos = { ...campos, ...novos }, sinal = Boolean(st.sinal_compra) || out.sinal_compra;
+  const todos = { ...campos, ...novos };
+  const sinal = Boolean(st.sinal_compra) || (out.sinal_compra && intencaoClara(turn.map((m) => m.content ?? '').join('\n')));
   if (st.lead_id) await d.db.q(`UPDATE leads SET qualificacao = $3, sinal_compra = $4,
       estagio = CASE WHEN estagio = 'novo' THEN 'em_qualificacao' ELSE estagio END WHERE tenant_id = $1 AND id = $2`, [T, st.lead_id, JSON.stringify(todos), sinal]);
 
@@ -330,13 +337,13 @@ if (import.meta.main) {
   const { default: pg } = await import('pg');
   const { pgDb } = await import('./db.ts');
   const { loadConfig } = await import('./agent/config.ts');
-  const { llmEnv, openaiChat } = await import('./agent/llm.ts');
+  const { llmEnv, llmTargets, withFallback } = await import('./agent/llm.ts');
   const { chatwootClient } = await import('./chatwoot.ts');
   const { ensureTenant } = await import('./conversation.ts');
 
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
   pool.on('error', (e) => console.error(JSON.stringify({ msg: 'pg pool error', err: e.message })));
-  const db = pgDb(pool), { config, hash } = loadConfig(), llm = llmEnv();
+  const db = pgDb(pool), { config, hash } = loadConfig(), llm = llmEnv(), targets = llmTargets();
   // regra 10: agente live só com provedor aprovado para produção
   const live = Object.entries(config.agentes).filter(([, a]) => a.status === 'live').map(([k]) => k);
   if (live.length && !llm.approved) throw new Error(`agentes live (${live.join(', ')}) exigem LLM_APPROVED_FOR_PRODUCTION=true`);
@@ -348,7 +355,7 @@ if (import.meta.main) {
   const deps: WorkerDeps = {
     db, cfg: config, hash, log, tenantId: await ensureTenant(db.q, config.chatwoot_account_id),
     cw: chatwootClient(process.env.CHATWOOT_URL ?? 'http://chatwoot:3000', config.chatwoot_account_id, process.env.CHATWOOT_BOT_TOKEN ?? '', process.env.CHATWOOT_ADMIN_TOKEN ?? ''),
-    chat: llm.baseUrl && llm.model ? openaiChat(llm.baseUrl, llm.model, process.env.LLM_API_KEY) : undefined,
+    chat: withFallback(targets),
     llm: { provider: llm.baseUrl ? new URL(llm.baseUrl).host : 'nenhum', model: llm.model || 'nenhum' },
     alert: alertFromEnv(),
   };

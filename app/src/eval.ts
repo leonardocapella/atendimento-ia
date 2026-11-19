@@ -3,7 +3,7 @@
 // O gate de publicação exige o modelo de produção (D2 ainda não escolhido).
 import { readFileSync } from 'node:fs';
 import { loadConfig } from './agent/config.ts';
-import { llmEnv, openaiChat, type Chat } from './agent/llm.ts';
+import { llmTargets, withFallback, type Chat } from './agent/llm.ts';
 import { fullSystem, parseOut, type Out } from './agent/prompt.ts';
 
 type Caso = { id: string; tipo: 'llm' | 'codigo'; cliente: string; sem_confirmacao?: boolean };
@@ -52,8 +52,7 @@ export function prontoParaPublicar(r: { resultados: Resultado[]; llmRodou: boole
 }
 
 if (import.meta.main) {
-  const env = llmEnv();
-  const chat = env.baseUrl && env.model ? openaiChat(env.baseUrl, env.model, process.env.LLM_API_KEY, 30_000) : null;
+  const chat = withFallback(llmTargets(), 30_000) ?? null;
   if (!chat) console.log('AVISO: LLM não configurado. EVs de modelo pulados. Gate de publicação fechado.');
   const r = await runEval(chat);
   for (const x of r.resultados) console.log(`${x.ok ? 'ok' : 'FALHOU'} ${x.id} ${x.motivo}`);

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { LlmError, withFallback } from '../src/agent/llm.ts';
 import { alertFromEnv, whatsappAlert } from '../src/alert.ts';
 import { ping } from '../src/monitor.ts';
 import { shouldPing } from '../src/worker.ts';
@@ -28,6 +29,27 @@ test('ping: URL vazia não chama a rede; falha de rede não derruba', async () =
   assert.equal(n, 0);
   assert.equal(await ping('https://hc.example/x', fetchFn as typeof fetch), true);
   assert.equal(await ping('https://hc.example/x', (async () => { throw new Error('rede'); }) as typeof fetch), false);
+});
+
+test('fallback: 429 tenta o próximo; 500 não tenta; sem fallback o 429 sobe', async () => {
+  const alvos: string[] = [];
+  const http = (code: (url: string) => number): typeof fetch => (async (url) => {
+    alvos.push(new URL(String(url)).host);
+    const status = code(String(url));
+    return new Response(status === 200 ? JSON.stringify({ choices: [{ message: { content: 'oi' } }] }) : '', { status });
+  }) as typeof fetch;
+  const targets = [
+    { baseUrl: 'http://gemini.test/v1', model: 'flash', apiKey: 'a' },
+    { baseUrl: 'http://groq.test/v1', model: 'llama', apiKey: 'b' },
+  ];
+  assert.equal(await withFallback(targets, 1000, http(() => 200))!([{ role: 'user', content: 'x' }]), 'oi');
+  alvos.length = 0;
+  assert.equal(await withFallback(targets, 1000, http((u) => u.includes('gemini') ? 429 : 200))!([{ role: 'user', content: 'x' }]), 'oi');
+  assert.deepEqual(alvos, ['gemini.test', 'groq.test']);
+  alvos.length = 0;
+  await assert.rejects(withFallback(targets, 1000, http(() => 500))!([{ role: 'user', content: 'x' }]), /LLM respondeu 500/);
+  assert.deepEqual(alvos, ['gemini.test']);
+  await assert.rejects(withFallback([targets[0]], 1000, http(() => 429))!([{ role: 'user', content: 'x' }]), /LLM respondeu 429/);
 });
 
 test('shouldPing: no máximo 1 por minuto, mesmo com fila cheia', () => {

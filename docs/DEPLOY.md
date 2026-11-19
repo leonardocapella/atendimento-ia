@@ -37,6 +37,9 @@ Senha que entra em URL tem que ser hex. Base64 quebra a conexão.
 | `LLM_MODEL` | nome do modelo nesse provedor |
 | `LLM_API_KEY` | chave. Vazio se o provedor local não pede |
 | `LLM_APPROVED_FOR_PRODUCTION` | `false` até o Leonardo escolher o modelo (D2). Com `false`, agente `status: live` no YAML impede o worker de subir |
+| `LLM_FALLBACK_BASE_URL` | vazio = sem fallback. API compatível com OpenAI, plano grátis |
+| `LLM_FALLBACK_MODEL` | modelo desse provedor. Só entra quando o principal responde 429 |
+| `LLM_FALLBACK_API_KEY` | chave do fallback. Vazio se o provedor não pede |
 | `SEED_DEMO` | vazio em produção. `true` só cria tenant, Lorenzo fictício (usuário 2) e 2 produtos de exemplo |
 | `HEALTHCHECK_URL` | URL do check grátis no healthchecks.io. Vazio = worker não pinga |
 | `SMTP_*` | opcional. E-mail do Chatwoot |

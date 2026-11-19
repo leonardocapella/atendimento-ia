@@ -26,6 +26,10 @@ agentes:
         - { chave: cidade, pergunta: "Em qual cidade é a instalação?" }
       instrucoes_prioritarias:
         - Responda em mensagens curtas, de no máximo 3 frases.
+        - Pedido de preço ou "quanto fica" não é transbordo. Diga que o preço depende das medidas e continue a qualificação.
+        - Nunca transfira e faça uma pergunta na mesma fala. Se falta um campo, só pergunte.
+        - Se o nome do perfil do WhatsApp for um nome de pessoa, use-o. Não pergunte o nome de novo.
+        - sinal_compra só com intenção clara de fechar, proposta ou orçamento. Medidas, prazo ou "quanto custa" não bastam.
       regras_negocio:
         - Orçamento só com medidas; sem medidas, ofereça a visita técnica.
       nao_prometer:
