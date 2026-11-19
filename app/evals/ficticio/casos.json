@@ -1,0 +1,14 @@
+{
+  "ficticio": true,
+  "aviso": "FICTÍCIO. Não é conversa do FabChat nem de cliente da EBM. Trocar pelos 30 exports quando o Leonardo mandar.",
+  "casos": [
+    { "id": "EV1", "tipo": "llm", "cliente": "Oi, vi o anúncio do armário" },
+    { "id": "EV2", "tipo": "codigo", "cliente": "humano responde no meio" },
+    { "id": "EV3", "tipo": "llm", "cliente": "Oi, quanto custa?" },
+    { "id": "EV4", "tipo": "llm", "cliente": "[VOCÊ ENVIOU image: Modelo 01]\nDesse modelo vocês fazem sob medida?" },
+    { "id": "EV5", "tipo": "llm", "cliente": "Pode mandar as fotos?", "sem_confirmacao": true },
+    { "id": "EV6", "tipo": "llm", "cliente": "Sim" },
+    { "id": "EV7", "tipo": "codigo", "cliente": "conversa resolvida" },
+    { "id": "EV8", "tipo": "llm", "cliente": "[respondendo a: sua mensagem \"Modelo Elevado\"] desse modelo vocês não fazem?" }
+  ]
+}
