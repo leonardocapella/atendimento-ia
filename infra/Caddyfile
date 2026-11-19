@@ -1,10 +1,13 @@
 {$CHATWOOT_HOST} {
+	# 1ª configuração (cria o super admin) e o painel super admin só por túnel SSH (porta 3000 no localhost da VPS)
+	@restrito path /installation/* /super_admin*
+	respond @restrito 404
 	reverse_proxy chatwoot:3000
 }
 
 {$PAINEL_HOST} {
-	# Webhooks internos (/hooks/*) NÃO são expostos: o Chatwoot chama o app pela rede do compose.
-	@internal path /hooks/*
-	respond @internal 404
+	# /hooks/* (webhook interno) e /health (consulta o banco) não são públicos
+	@interno path /hooks/* /health
+	respond @interno 404
 	reverse_proxy api:8080
 }

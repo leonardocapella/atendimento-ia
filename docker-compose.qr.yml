@@ -1,0 +1,21 @@
+# WhatsApp por QR (Evolution/Baileys). RISCO: viola os termos do WhatsApp e pode BANIR o número.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.qr.yml up -d
+# Arquivo separado para o compose padrão não exigir EVOLUTION_API_KEY.
+services:
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env para usar o QR}
+      DATABASE_PROVIDER: postgresql
+      # banco e usuário próprios (sem acesso ao banco do Chatwoot)
+      DATABASE_CONNECTION_URI: postgres://evolution:${EVOLUTION_DB_PASSWORD:?defina no .env para usar o QR}@postgres:5432/evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/2
+      CHATWOOT_ENABLED: "true"
+    networks: [backend, edge]   # sem "ports": não exposto publicamente
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
