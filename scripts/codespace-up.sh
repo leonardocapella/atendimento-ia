@@ -73,6 +73,7 @@ LORENZO_SENHA=Ebm!$(hex 12)Z9
 CRED
   umask 022
 fi
+chmod 600 "$CRED"
 cred() { awk -F= -v k="$1" '$1==k{sub(/^[^=]*=/,""); print; exit}' "$CRED"; }
 
 log "2/6 Subindo containers (a 1ª vez baixa a imagem do Chatwoot e demora alguns minutos)"
@@ -80,7 +81,7 @@ log "2/6 Subindo containers (a 1ª vez baixa a imagem do Chatwoot e demora algun
 
 log "3/6 Esperando o Chatwoot responder"
 for i in $(seq 120); do
-  curl -fsS -o /dev/null http://127.0.0.1:3000/api && break
+  curl -fs -o /dev/null http://127.0.0.1:3000/api && break
   [ "$i" = 120 ] && { echo "Chatwoot não subiu em 10 min. Veja: docker compose logs chatwoot" >&2; exit 1; }
   sleep 5
 done
@@ -147,8 +148,8 @@ fi
 
 log "5/6 Instância WhatsApp na Evolution e inbox no Chatwoot"
 EVO=http://127.0.0.1:8080; EVK=$(getenv EVOLUTION_API_KEY)
-for i in $(seq 60); do curl -fsS -o /dev/null "$EVO/" && break; [ "$i" = 60 ] && { echo "Evolution não subiu" >&2; exit 1; }; sleep 3; done
-if ! curl -fsS -H "apikey: $EVK" "$EVO/instance/fetchInstances?instanceName=$INSTANCIA" | grep -q "\"$INSTANCIA\""; then
+for i in $(seq 60); do curl -fs -o /dev/null "$EVO/" && break; [ "$i" = 60 ] && { echo "Evolution não subiu" >&2; exit 1; }; sleep 3; done
+if ! curl -fs -H "apikey: $EVK" "$EVO/instance/fetchInstances?instanceName=$INSTANCIA" | grep -q "\"$INSTANCIA\""; then
   curl -fsS -X POST "$EVO/instance/create" -H "apikey: $EVK" -H 'content-type: application/json' \
     -d "{\"instanceName\":\"$INSTANCIA\",\"integration\":\"WHATSAPP-BAILEYS\",\"qrcode\":true}" -o /dev/null
   echo "   instância '$INSTANCIA' criada"
@@ -172,6 +173,7 @@ else
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(j.base64){require("fs").writeFileSync("qr.png",Buffer.from(String(j.base64).replace(/^data:image\/\w+;base64,/,""),"base64"));console.log("   qr.png salvo (vale ~40 s; o /manager mostra sempre o atual)")}else console.log("   sem QR agora:",s.slice(0,200))})'
 fi
 grep -q '^EVOLUTION_API_KEY=' "$CRED" || echo "EVOLUTION_API_KEY=$EVK" >> "$CRED"
+chmod 600 "$CRED"; [ -f qr.png ] && chmod 600 qr.png
 
 cat <<FIM
 
