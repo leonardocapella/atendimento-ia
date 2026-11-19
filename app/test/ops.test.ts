@@ -1,15 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { alertFromEnv, telegramAlert } from '../src/alert.ts';
+import { alertFromEnv, whatsappAlert } from '../src/alert.ts';
 import { ping } from '../src/monitor.ts';
 
-test('telegram: sem token não envia; com token manda o texto e corta em 4000', async () => {
+test('whatsapp: sem número não envia; com a instância manda só ao gestor e corta em 4000', async () => {
   assert.equal(alertFromEnv({}), null);
-  let body = '';
-  const fetchFn = async (_u: string, init?: RequestInit) => { body = String(init?.body); return new Response('{}', { status: 200 }); };
-  await telegramAlert('t', '1', fetchFn as typeof fetch)('a'.repeat(5000));
+  assert.equal(alertFromEnv({ EVOLUTION_URL: 'http://evolution:8080', EVOLUTION_API_KEY: 'k', EVOLUTION_INSTANCE: '../x', GESTOR_WHATSAPP: '5561999999999' }), null);
+  let url = '', body = '', key = '';
+  const fetchFn = async (u: string, init?: RequestInit) => {
+    url = u; body = String(init?.body); key = new Headers(init?.headers).get('apikey') ?? '';
+    return new Response('{}', { status: 200 });
+  };
+  const env = { EVOLUTION_URL: 'http://evolution:8080/', EVOLUTION_API_KEY: 'k', EVOLUTION_INSTANCE: 'ebm', GESTOR_WHATSAPP: '+55 61 99999-9999' };
+  await alertFromEnv(env, fetchFn as typeof fetch)!('a'.repeat(5000));
+  assert.equal(url, 'http://evolution:8080/message/sendText/ebm');
+  assert.equal(key, 'k');
+  assert.equal(JSON.parse(body).number, '5561999999999');
   assert.equal(JSON.parse(body).text.length, 4000);
-  assert.equal(JSON.parse(body).chat_id, '1');
+  await assert.rejects(whatsappAlert('http://evolution:8080', 'k', 'ebm', '5561999999999', (async () => new Response('', { status: 500 })) as typeof fetch)('oi'), /Evolution respondeu 500/);
 });
 
 test('ping: URL vazia não chama a rede; falha de rede não derruba', async () => {

@@ -322,7 +322,7 @@ test('SLA: estouro 1 lembra destino e gestor; estouro 2 passa ao backup; cada um
   assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 2);
 });
 
-test('SLA: alerta Telegram sai uma vez por estouro e não depende do Chatwoot', async () => {
+test('SLA: alerta WhatsApp sai uma vez por estouro e não depende do Chatwoot', async () => {
   const s = await setup();
   const avisos: string[] = [];
   s.deps.alert = async (t) => { avisos.push(t); };

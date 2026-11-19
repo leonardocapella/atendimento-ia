@@ -276,7 +276,7 @@ export async function runSla(d: WorkerDeps, t: Timer): Promise<string> {
   }
   const [marcado] = await d.db.q(`UPDATE handoff_events SET sla_estouros = $3 WHERE tenant_id = $1 AND id = $2 AND sla_estouros < $3 RETURNING 1`, [d.tenantId, h.id, estouro]);
   if (!marcado) return 'já tratado';
-  await d.alert?.(`SLA ${estouro} estourado. Conversa ${conv}, motivo ${h.motivo}, ${min} min.`).catch((e) => d.log?.error({ err: e.message }, 'alerta telegram falhou'));
+  await d.alert?.(`SLA ${estouro} estourado. Conversa ${conv}, motivo ${h.motivo}, ${min} min.`).catch((e) => d.log?.error({ err: e.message }, 'alerta whatsapp falhou'));
   return `sla${estouro}`;
 }
 

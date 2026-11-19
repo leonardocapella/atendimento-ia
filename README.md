@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F1 em andamento** (T2–T5 prontos; T6 evals e T7 replay com fixtures fictícias, esperando as 30 conversas do FabChat; T8 CI, T9 Telegram e T10 monitor/backup no repo). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2–T5 prontos; T6 evals e T7 replay com fixtures fictícias, esperando as 30 conversas do FabChat; T8 CI, T9 alerta do gestor por WhatsApp na Evolution e T10 monitor/backup no repo). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -62,6 +62,7 @@ A URL usa a rede interna do compose; o Caddy bloqueia `/hooks/*` de fora.
 
 - **Recomendado: Cloud API oficial** (Chatwoot > Inboxes > WhatsApp > WhatsApp Cloud). Responder dentro da janela de 24h é grátis; templates iniciados pela empresa são cobrados pela Meta.
 - **Opcional: QR (Evolution/Baileys):** preencha `EVOLUTION_API_KEY` e `EVOLUTION_DB_PASSWORD` (antes da 1ª subida do Postgres) e rode `docker compose -f docker-compose.yml -f docker-compose.qr.yml up -d`. **Risco:** viola os termos do WhatsApp e pode **banir o número**, principalmente em disparos em massa. Use só em número que você aceita perder.
+- **Alerta do gestor (T9):** a mesma instância manda WhatsApp para `GESTOR_WHATSAPP` quando o SLA estoura ou o envio ao Chatwoot falha. Sem `EVOLUTION_INSTANCE` ou sem o número, o alerta fica só na nota do Chatwoot. Não há Telegram.
 
 ## Spikes do F0 (comportamento real do Chatwoot)
 

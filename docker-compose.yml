@@ -53,10 +53,12 @@ x-app: &app
     LLM_API_KEY: ${LLM_API_KEY:-}
     LLM_APPROVED_FOR_PRODUCTION: ${LLM_APPROVED_FOR_PRODUCTION:-false}
     SEED_DEMO: ${SEED_DEMO:-}
-    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-    TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     HEALTHCHECK_URL: ${HEALTHCHECK_URL:-}
-  networks: [backend, edge]   # edge = saída para internet (LLM, Telegram)
+    EVOLUTION_URL: ${EVOLUTION_URL:-}
+    EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+    EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE:-}
+    GESTOR_WHATSAPP: ${GESTOR_WHATSAPP:-}
+  networks: [backend, edge]   # edge = saída para internet (LLM, Evolution)
   depends_on:
     postgres: { condition: service_healthy }
     redis: { condition: service_healthy }
