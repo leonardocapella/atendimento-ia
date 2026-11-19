@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F1 em andamento** (T2 banco, T3 config + painel e T4 motor de conversa prontos; falta T5 SLA, T6 evals, T7 replay, T9 Telegram, T10 backup). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2 banco, T3 config + painel e T4 motor de conversa e T5 SLA prontos; falta T6 evals, T7 replay, T9 Telegram, T10 backup). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -97,6 +97,15 @@ Anote os resultados no plano antes do F1.
 - O LLM devolve JSON (`resposta`, `decisao`, `motivo`, `campos`, `sinal_compra`, `enviar_produtos`). Transferência sem motivo da lista é ignorada. Foto de produto sai pela ferramenta `enviar_produtos`, e a IA só fala "enviei" depois da confirmação (`message_updated` com `source_id`).
 - Tokens no `.env`: `CHATWOOT_BOT_TOKEN` (mensagens públicas) e `CHATWOOT_ADMIN_TOKEN` (nota, atribuição, labels, status).
 - Agente `status: live` no YAML exige `LLM_APPROVED_FOR_PRODUCTION=true`; sem isso o worker não sobe.
+
+## SLA e transbordo (F1/T5)
+
+- Todo transbordo (lead quente, pedido, falha, fora da janela) tem SLA de 1ª resposta humana: `sla_min` e `sla2_min` no YAML (padrão 10 e 30 min).
+- O relógio começa no transbordo, ou na abertura do expediente do destino (`users_map.horario`; sem horário próprio, vale o do agente). Nesse caso, o cliente recebe `msg_fora_expediente` dizendo quando o time volta.
+- **Estouro 1:** label `sla-estourado` e nota privada mencionando o destino e os gestores/admins (o Chatwoot notifica pela menção). **Estouro 2:** passa ao `backup_team_id` (se houver) e alerta de novo. Cada estouro dispara uma vez.
+- O SLA para na 1ª mensagem **pública** de um humano. Nota privada e mensagens do bot (passagem, espera) não param.
+- Cliente insistindo enquanto espera: no máximo 1 `msg_espera` a cada 15 min; a IA continua pausada.
+- Fora do horário com `responder_fora_do_horario: false`: 1 mensagem de ausência por período fechado; na abertura, a IA responde quem escreveu, se ainda estiver na janela de 24h. Fora da janela, vai para humano com a label `fora-janela` (sem template pago).
 
 ## Testes
 

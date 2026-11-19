@@ -6,6 +6,8 @@ import { HttpError, type Chatwoot, type CwMsg } from './chatwoot.ts';
 import { startHandoff } from './conversation.ts';
 import { buildMessages, currentTurn, fullSystem, MOTIVOS_LLM, parseOut, validName, type Ctx, type Out } from './agent/prompt.ts';
 import type { AgentConfig, Config } from './agent/config.ts';
+import { inHours, nextOpen } from './hours.ts';
+export { inHours };
 import type { Chat } from './agent/llm.ts';
 import type { Db } from './db.ts';
 
@@ -21,7 +23,7 @@ const MAX_TENTATIVAS = 3;
 
 export async function claim(db: Db, limit = 10): Promise<Timer[]> {
   return db.q(`UPDATE timers SET locked_until = now() + interval '3 minutes', tentativas = tentativas + 1
-    WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM timers WHERE kind IN ('reply', 'handoff') AND done_at IS NULL AND due_at <= now()
+    WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM timers WHERE kind <> 'followup' AND done_at IS NULL AND due_at <= now()
       AND (locked_until IS NULL OR locked_until < now()) ORDER BY due_at LIMIT $1 FOR UPDATE SKIP LOCKED)
     RETURNING id, tenant_id, kind, ref_id, due_at::text AS due, tentativas`, [limit]);
 }
@@ -29,15 +31,6 @@ export async function claim(db: Db, limit = 10): Promise<Timer[]> {
 // Se chegou mensagem nova durante o job, due_at mudou: o timer continua pendente e roda de novo.
 const finish = (db: Db, t: Timer) => db.q(`UPDATE timers SET locked_until = NULL, done_at = CASE WHEN due_at::text = $3 THEN now() ELSE done_at END
   WHERE tenant_id = $1 AND id = $2`, [t.tenant_id, t.id, t.due]);
-
-export function inHours(dias: AgentConfig['horario']['dias'], fuso: string, now = new Date()): boolean {
-  if (!Object.keys(dias).length) return true;   // sem horário configurado = sempre aberto
-  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: fuso, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-    .formatToParts(now).map((x) => [x.type, x.value]));
-  const dia = ({ Sun: 'dom', Mon: 'seg', Tue: 'ter', Wed: 'qua', Thu: 'qui', Fri: 'sex', Sat: 'sab' } as const)[p.weekday as 'Sun'];
-  const hm = `${p.hour}:${p.minute}`;
-  return (dias[dia] ?? []).some(([a, b]) => hm >= a && hm < b);
-}
 
 export function isHot(a: AgentConfig, campos: Record<string, unknown>, sinal: boolean): boolean {
   const lq = a.regras.transbordo.lead_quente;
@@ -95,7 +88,8 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   const tb = agent.regras.transbordo;
 
   const history = await d.cw.messages(conv);
-  const turn = currentTurn(history);
+  const ausencias = await d.db.q(`SELECT brain_send_id FROM outbound_sends WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND kind = 'ausencia'`, [T, conv]);
+  const turn = currentTurn(history, new Set(ausencias.map((r) => r.brain_send_id)));
   if (!turn.length) return 'nada a responder';
   const trigger = turn.at(-1)!.id;
 
@@ -114,11 +108,12 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
 
   const aberto = inHours(agent.horario.dias, agent.comportamento.fuso);
   if (!aberto && !agent.horario.responder_fora_do_horario) {
-    // ponytail: "uma ausência por janela fechada" ≈ no máximo 1 a cada 12 h; reativação na abertura entra no T5.
-    if (st.ausencia_em && Date.now() - new Date(st.ausencia_em).getTime() < 12 * 3600e3) return 'fora do horário';
+    // uma ausência por janela fechada: enquanto houver reativação pendente, não manda outra
+    if ((await d.db.q(`SELECT 1 FROM timers WHERE tenant_id = $1 AND kind = 'reativar' AND ref_id = $2 AND done_at IS NULL`, [T, conv])).length) return 'fora do horário';
     const r = await reply('ausencia', agent.horario.msg_ausencia);
     if (r === 'enviada') {
-      await d.db.q(`UPDATE conversation_state SET ausencia_em = now() WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [T, conv]);
+      await d.db.q(`INSERT INTO timers (tenant_id, kind, ref_id, due_at) VALUES ($1, 'reativar', $2, $3) ON CONFLICT DO NOTHING`,
+        [T, conv, nextOpen(agent.horario.dias, agent.comportamento.fuso)]);
       await d.cw.addLabels(conv, ['fora-horario']);
     }
     return r;
@@ -141,7 +136,7 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
 
   const falha = async (erro: string) => {
     await run(null, erro);
-    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: 'falha_tecnica', justificativa: erro, msg: tb.msg_falha, destino: tb.destino, labels: ['ia-falhou'] }));
+    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: 'falha_tecnica', justificativa: erro, msg: tb.msg_falha, agent, labels: ['ia-falhou'] }));
     return 'transbordo (falha do LLM)';
   };
   if (!d.chat) return falha('LLM não configurado');
@@ -176,7 +171,7 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   // lead quente é decidido em código: a mensagem de passagem substitui a resposta do LLM
   if (isHot(agent, todos, sinal)) {
     if (await stale()) return 'descartada';
-    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: 'lead_quente', msg: tb.msg_passagem, destino: tb.destino, snapshot: todos, labels: ['lead-quente'] }));
+    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: 'lead_quente', msg: tb.msg_passagem, agent, snapshot: todos, labels: ['lead-quente'] }));
     return 'transbordo (lead quente)';
   }
 
@@ -186,7 +181,7 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
 
   // RQ6: transferência só com motivo da lista; sem motivo válido, a IA segue na conversa
   if (out.decisao === 'transferir' && MOTIVOS_LLM.includes(out.motivo as any)) {
-    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: out.motivo!, justificativa: out.justificativa ?? undefined, destino: tb.destino, snapshot: todos }));
+    await d.db.tx((q) => startHandoff(q, { tenant: T, conv, motivo: out.motivo!, justificativa: out.justificativa ?? undefined, agent, snapshot: todos }));
     return `enviada + transbordo (${out.motivo})`;
   }
   return 'enviada';
@@ -214,11 +209,50 @@ export async function runHandoff(d: WorkerDeps, hId: number): Promise<string> {
   return 'ok';
 }
 
+const mention = (id: number) => `[@atendente](mention://user/${id}/atendente)`;   // menção em nota privada = notificação no Chatwoot
+
+// SLA (RQ7): estouro 1 lembra o destino e alerta gestores; estouro 2 passa ao time de backup (ou alerta de novo).
+// msg_espera: avisa o cliente que o humano já foi chamado, sem parar o SLA (mensagem do bot não conta como humana).
+export async function runSla(d: WorkerDeps, t: Timer): Promise<string> {
+  const [h] = await d.db.q(`SELECT h.*, s.agent_key FROM handoff_events h JOIN conversation_state s ON s.tenant_id = h.tenant_id AND s.chatwoot_conversation_id = h.chatwoot_conversation_id
+    WHERE h.tenant_id = $1 AND h.id = $2`, [d.tenantId, t.ref_id]);
+  if (!h || h.primeira_resposta_em) return 'já respondido';
+  const conv = Number(h.chatwoot_conversation_id), tb = (d.cfg.agentes[h.agent_key] ?? Object.values(d.cfg.agentes)[0]).regras.transbordo;
+
+  if (t.kind === 'msg_espera') return (await sendOnce(d, conv, t.id, 'espera', tb.msg_espera), 'espera enviada');
+
+  const gestores = (await d.db.q(`SELECT chatwoot_user_id FROM users_map WHERE tenant_id = $1 AND role IN ('gestor', 'admin')`, [d.tenantId])).map((u) => Number(u.chatwoot_user_id));
+  const estouro = t.kind === 'sla1' ? 1 : 2;
+  const [marcado] = await d.db.q(`UPDATE handoff_events SET sla_estouros = $3 WHERE tenant_id = $1 AND id = $2 AND sla_estouros < $3 RETURNING 1`, [d.tenantId, h.id, estouro]);
+  if (!marcado) return 'já tratado';
+  const min = estouro === 1 ? tb.sla_min : tb.sla2_min;
+  if (estouro === 2 && tb.backup_team_id) await d.cw.assign(conv, { team_id: tb.backup_team_id });
+  await d.cw.addLabels(conv, ['sla-estourado']);
+  const quem = [...new Set([...(h.para_user_id ? [Number(h.para_user_id)] : []), ...gestores])].map(mention).join(' ');
+  await d.cw.note(conv, `⏰ SLA estourado (${min} min sem resposta humana, motivo: ${h.motivo}).${estouro === 2 && tb.backup_team_id ? ' Conversa passada ao time de backup.' : ''} ${quem}`);
+  return `sla${estouro}`;
+}
+
+// Regra 6: na abertura do expediente, responde quem escreveu com a loja fechada; fora da janela de 24h, vai para humano.
+// ponytail: sem template pago (permitir_templates_pagos=false é o padrão do plano); entra junto com os disparos (F5).
+export async function runReactivate(d: WorkerDeps, conv: number): Promise<string> {
+  const [st] = await d.db.q(`SELECT agent_key, ia_pausada, last_customer_msg_at > now() - interval '24 hours' AS na_janela FROM conversation_state WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [d.tenantId, conv]);
+  if (!st || st.ia_pausada) return 'pausada';
+  if (!st.na_janela) {
+    const agent = d.cfg.agentes[st.agent_key] ?? Object.values(d.cfg.agentes)[0];
+    await d.db.tx((q) => startHandoff(q, { tenant: d.tenantId, conv, motivo: 'fora_janela', justificativa: 'janela de 24h fechada na reabertura', agent, labels: ['fora-janela'] }));
+    return 'fora da janela';
+  }
+  await d.db.q(`INSERT INTO timers (tenant_id, kind, ref_id, due_at) VALUES ($1, 'reply', $2, now()) ON CONFLICT (tenant_id, kind, ref_id) WHERE done_at IS NULL DO UPDATE SET due_at = now()`, [d.tenantId, conv]);
+  return 'reativada';
+}
+
 export async function runJob(d: WorkerDeps, t: Timer): Promise<string> {
   try {
-    const r = t.kind === 'reply' ? await runReply(d, t) : await runHandoff(d, t.ref_id);
+    const r = t.kind === 'reply' ? await runReply(d, t) : t.kind === 'handoff' ? await runHandoff(d, t.ref_id)
+      : t.kind === 'reativar' ? await runReactivate(d, t.ref_id) : await runSla(d, t);
     await finish(d.db, t);
-    d.log?.info({ conv: t.kind === 'reply' ? t.ref_id : undefined, kind: t.kind, r }, 'job');
+    d.log?.info({ kind: t.kind, ref: t.ref_id, r }, 'job');
     return r;
   } catch (e: any) {
     const retry = (!(e instanceof HttpError) || e.retryable) && t.tentativas < MAX_TENTATIVAS;
@@ -230,8 +264,8 @@ export async function runJob(d: WorkerDeps, t: Timer): Promise<string> {
     await finish(d.db, t);
     if (t.kind === 'reply') {   // falha final de envio = transbordo (regra 4)
       const [st] = await d.db.q(`SELECT agent_key FROM conversation_state WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [d.tenantId, t.ref_id]);
-      const tb = (d.cfg.agentes[st?.agent_key] ?? Object.values(d.cfg.agentes)[0]).regras.transbordo;
-      await d.db.tx((q) => startHandoff(q, { tenant: d.tenantId, conv: t.ref_id, motivo: 'falha_tecnica', justificativa: e.message, destino: tb.destino, labels: ['ia-falhou-envio'] }));
+      const agent = d.cfg.agentes[st?.agent_key] ?? Object.values(d.cfg.agentes)[0];
+      await d.db.tx((q) => startHandoff(q, { tenant: d.tenantId, conv: t.ref_id, motivo: 'falha_tecnica', justificativa: e.message, agent, labels: ['ia-falhou-envio'] }));
       return 'transbordo (falha de envio)';
     }
     return 'falhou';   // ponytail: transbordo que falhou 3x só fica no log; o alerta independente entra no T9 (Telegram)

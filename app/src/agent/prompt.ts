@@ -86,9 +86,11 @@ export function buildMessages(system: string, history: CwMsg[], images: Map<numb
 }
 
 // Mensagens do cliente depois da última fala nossa (IA ou humano) = turno atual.
-export function currentTurn(history: CwMsg[]): CwMsg[] {
+// skip: brain_send_ids que não respondem o cliente (ex.: mensagem de ausência), para a reativação achar o turno.
+export function currentTurn(history: CwMsg[], skip: Set<string> = new Set()): CwMsg[] {
   const turn: CwMsg[] = [];
   for (let i = history.length - 1; i >= 0; i--) {
+    if (skip.has(history[i].content_attributes?.brain_send_id ?? '')) continue;
     const who = authorOf(history[i]);
     if (who === 'ia' || who === 'humano') break;
     if (who === 'cliente') turn.unshift(history[i]);

@@ -1,7 +1,8 @@
 // Dono de conversation_state (R2). Recebe eventos do Chatwoot e decide: pausar, transferir na hora ou agendar resposta.
 // Tudo numa transação: dedupe (regra 3) + mudança de estado + timer.
 import { parseEvent } from './chatwoot.ts';
-import type { Config } from './agent/config.ts';
+import type { AgentConfig, Config } from './agent/config.ts';
+import { nextOpen, quando, type Dias } from './hours.ts';
 import type { Db, Query } from './db.ts';
 
 export type ConvDeps = { db: Db; cfg: Config; tenantId: number };
@@ -19,20 +20,29 @@ export function pickAgent(cfg: Config, inbox?: number): string | null {
 }
 
 // Transbordo dispara uma vez: se já há um aberto, não cria outro. Os efeitos no Chatwoot rodam no worker (timer 'handoff').
+// RQ7: todo transbordo tem SLA. O relógio começa agora ou na abertura do expediente do destino.
 export async function startHandoff(q: Query, t: {
   tenant: number; conv: number; motivo: string; justificativa?: string; msg?: string;
-  destino: { user_id?: number; team_id?: number }; snapshot?: Record<string, unknown>; labels?: string[];
+  agent: AgentConfig; snapshot?: Record<string, unknown>; labels?: string[]; now?: Date;
 }): Promise<number | null> {
   const open = await q(`SELECT 1 FROM handoff_events WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND primeira_resposta_em IS NULL`, [t.tenant, t.conv]);
   if (open.length) return null;
+  const tb = t.agent.regras.transbordo, fuso = t.agent.comportamento.fuso, now = t.now ?? new Date();
+  const [u] = tb.destino.user_id ? await q(`SELECT horario FROM users_map WHERE tenant_id = $1 AND chatwoot_user_id = $2`, [t.tenant, tb.destino.user_id]) : [];
+  const dias: Dias = u && Object.keys(u.horario).length ? u.horario : t.agent.horario.dias;
+  const start = nextOpen(dias, fuso, now);
+  const msg = t.msg && start.getTime() - now.getTime() > 60_000 ? `${t.msg}\n\n${tb.msg_fora_expediente.replace('{quando}', quando(start, fuso))}` : t.msg;
+
   const [h] = await q(
     `INSERT INTO handoff_events (tenant_id, chatwoot_conversation_id, motivo, justificativa, para_user_id, para_team_id, snapshot)
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [t.tenant, t.conv, t.motivo, t.justificativa ?? null, t.destino.user_id ?? null, t.destino.team_id ?? null,
-     JSON.stringify({ ...t.snapshot, _msg: t.msg ?? null, _labels: t.labels ?? [] })]);
+    [t.tenant, t.conv, t.motivo, t.justificativa ?? null, tb.destino.user_id ?? null, tb.destino.team_id ?? null,
+     JSON.stringify({ ...t.snapshot, _msg: msg ?? null, _labels: t.labels ?? [] })]);
   await q(`UPDATE conversation_state SET ia_pausada = true, pausa_motivo = $3 WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [t.tenant, t.conv, t.motivo]);
-  await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind = 'reply' AND ref_id = $2 AND done_at IS NULL`, [t.tenant, t.conv]);
-  await q(`INSERT INTO timers (tenant_id, kind, ref_id, due_at) VALUES ($1, 'handoff', $2, now())`, [t.tenant, h.id]);
+  await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind IN ('reply', 'reativar') AND ref_id = $2 AND done_at IS NULL`, [t.tenant, t.conv]);
+  const min = (m: number) => new Date(start.getTime() + m * 60_000);
+  await q(`INSERT INTO timers (tenant_id, kind, ref_id, due_at) VALUES ($1, 'handoff', $2, now()), ($1, 'sla1', $2, $3), ($1, 'sla2', $2, $4)`,
+    [t.tenant, h.id, min(tb.sla_min), min(tb.sla2_min)]);
   if (t.motivo === 'lead_quente')
     await q(`UPDATE leads SET estagio = 'quente' FROM conversation_state s WHERE s.tenant_id = $1 AND s.chatwoot_conversation_id = $2 AND leads.tenant_id = $1 AND leads.id = s.lead_id`, [t.tenant, t.conv]);
   return h.id;
@@ -92,12 +102,20 @@ export async function onEvent(d: ConvDeps, body: unknown): Promise<string> {
                           ON CONFLICT (tenant_id, chatwoot_conversation_id) DO UPDATE SET lead_id = excluded.lead_id, last_msg_at = now(), last_customer_msg_at = now(),
                             audios_pedidos = conversation_state.audios_pedidos + $5
                           RETURNING ia_pausada, agent_key, audios_pedidos`, [T, ev.conv, lead.id, agentKey, onlyAudio ? 1 : 0]);
-    if (st.ia_pausada) return 'pausada';   // T5: mensagem de espera
+    if (st.ia_pausada) {
+      // cliente esperando o humano: no máximo 1 mensagem de espera a cada 15 min (contando do transbordo); não para o SLA
+      await q(`INSERT INTO timers (tenant_id, kind, ref_id, due_at)
+        SELECT h.tenant_id, 'msg_espera', h.id, now() FROM handoff_events h
+        WHERE h.tenant_id = $1 AND h.chatwoot_conversation_id = $2 AND h.primeira_resposta_em IS NULL AND h.handoff_em < now() - interval '15 minutes'
+          AND NOT EXISTS (SELECT 1 FROM timers tm WHERE tm.tenant_id = h.tenant_id AND tm.kind = 'msg_espera' AND tm.ref_id = h.id
+                          AND (tm.done_at IS NULL OR tm.done_at > now() - interval '15 minutes'))`, [T, ev.conv]);
+      return 'pausada';
+    }
 
     const agent = d.cfg.agentes[st.agent_key] ?? d.cfg.agentes[agentKey];
     const tb = agent.regras.transbordo;
     const handoff = (motivo: string, justificativa: string) =>
-      startHandoff(q, { tenant: T, conv: ev.conv, motivo, justificativa, msg: tb.msg_falha, destino: tb.destino });
+      startHandoff(q, { tenant: T, conv: ev.conv, motivo, justificativa, msg: tb.msg_falha, agent });
 
     // atalhos sem LLM (regra 2)
     if (lead.sempre_humano) return (await handoff('pedido_cliente', 'contato sempre-humano'), 'transbordo');

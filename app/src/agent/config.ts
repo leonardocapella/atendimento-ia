@@ -49,6 +49,7 @@ const Agent = z.object({
       msg_passagem: z.string().min(1),
       msg_espera: z.string().min(1),
       msg_falha: z.string().default('Já vou te passar para um atendente.'),
+      msg_fora_expediente: z.string().default('Nosso time volta {quando} e já te chama por aqui.'),
       msg_pedir_texto: z.string().default('Consegue me mandar por escrito? Assim te respondo mais rápido.'),
     }),
   }),

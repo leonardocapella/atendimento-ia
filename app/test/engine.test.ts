@@ -6,7 +6,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { migrate, type Db, type Query } from '../src/db.ts';
 import { loadConfig, type Config } from '../src/agent/config.ts';
 import { onEvent, ensureTenant } from '../src/conversation.ts';
-import { claim, runJob, inHours, type WorkerDeps } from '../src/worker.ts';
+import { claim, runJob, type WorkerDeps } from '../src/worker.ts';
+import { inHours, nextOpen } from '../src/hours.ts';
 import { validName, parseOut, buildMessages } from '../src/agent/prompt.ts';
 import { HttpError, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
 import type { Msg } from '../src/agent/llm.ts';
@@ -88,10 +89,16 @@ async function setup(opts: { replies?: (string | Error)[]; cfg?: (c: Config) => 
     }
     return results;
   };
+  // "avança o relógio": puxa para trás os prazos e datas em vez de mexer no now() do Postgres
+  const advance = async (min: number) => {
+    const i = `${min} minutes`;
+    await q(`UPDATE timers SET due_at = due_at - $1::interval, done_at = done_at - $1::interval`, [i]);
+    await q(`UPDATE handoff_events SET handoff_em = handoff_em - $1::interval`, [i]);
+  };
   const state = async () => (await q(`SELECT * FROM conversation_state WHERE chatwoot_conversation_id = $1`, [CONV]))[0];
   const handoffs = () => q(`SELECT motivo FROM handoff_events ORDER BY id`);
   const outgoing = () => fake.msgs.filter((m) => m.message_type === 1 && !m.private);
-  return { db, q, deps, config, fake, prompts, customer, human, drain, state, handoffs, outgoing };
+  return { advance, db, q, deps, config, fake, prompts, customer, human, drain, state, handoffs, outgoing };
 }
 
 test('EV1: 3 mensagens em sequência + webhook duplicado = 1 resposta', async () => {
@@ -290,4 +297,107 @@ test('inHours respeita o fuso', () => {
 test('parseOut aceita JSON em bloco de código e recusa sem resposta', () => {
   assert.equal(parseOut('```json\n' + out({ resposta: 'oi' }) + '\n```').resposta, 'oi');
   assert.throws(() => parseOut(out({ resposta: '' })));
+});
+
+// ---- T5: SLA, mensagem de espera, reativação ----
+const notes = (s: Awaited<ReturnType<typeof setup>>) => s.fake.msgs.filter((m) => m.private).map((m) => m.content!);
+
+test('SLA: estouro 1 lembra destino e gestor; estouro 2 passa ao backup; cada um uma vez', async () => {
+  const s = await setup({ cfg: (c) => { c.agentes.vendas.regras.transbordo.backup_team_id = 3; } });
+  await s.q(`INSERT INTO users_map (tenant_id, chatwoot_user_id, role) VALUES ($1, 2, 'atendente'), ($1, 8, 'gestor')`, [s.deps.tenantId]);
+  await s.customer('falar com atendente'); await s.drain();
+  assert.equal(notes(s).length, 1);   // só a nota do transbordo
+
+  await s.advance(10); await s.drain();
+  assert.match(notes(s).at(-1)!, /SLA estourado \(10 min/);
+  assert.match(notes(s).at(-1)!, /user\/2\/.*user\/8\//);
+  assert.ok(s.fake.calls.includes('labels:sla-estourado'));
+  assert.ok(!s.fake.calls.includes('assign:team3'));
+
+  await s.advance(20); await s.drain();
+  assert.ok(s.fake.calls.includes('assign:team3'));
+  assert.match(notes(s).at(-1)!, /30 min.*time de backup/);
+  await s.advance(60); await s.drain();
+  assert.equal(notes(s).length, 3);
+  assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 2);
+});
+
+test('SLA: para na 1ª resposta humana pública; nota privada e mensagem da IA não param', async () => {
+  const s = await setup();
+  await s.customer('falar com atendente'); await s.drain();
+  await s.human('vou ver', true);   // nota privada
+  await s.advance(10); await s.drain();
+  assert.equal(notes(s).filter((n) => /SLA/.test(n)).length, 1, 'nota privada não para o SLA');
+
+  const s2 = await setup();
+  await s2.customer('falar com atendente'); await s2.drain();
+  await s2.human('Oi, aqui é o Lorenzo');
+  await s2.advance(60); await s2.drain();
+  assert.equal(notes(s2).filter((n) => /SLA/.test(n)).length, 0);
+});
+
+test('mensagem de espera: cliente insiste depois de 15 min = 1 aviso; não pausa nem para o SLA', async () => {
+  const s = await setup();
+  await s.customer('falar com atendente'); await s.drain();
+  const antes = s.outgoing().length;
+  await s.customer('alô?'); await s.drain();
+  assert.equal(s.outgoing().length, antes, 'antes de 15 min, nenhum aviso');
+
+  await s.advance(16);
+  await s.customer('tem alguém?'); await s.customer('???'); await s.drain();
+  assert.equal(s.outgoing().length, antes + 1);
+  assert.match(s.outgoing().at(-1)!.content!, /já foi avisado/);
+  assert.equal((await s.q(`SELECT primeira_resposta_em FROM handoff_events`))[0].primeira_resposta_em, null);
+
+  await s.advance(16);
+  await s.customer('e agora?'); await s.drain();
+  assert.equal(s.outgoing().length, antes + 2, 'outro aviso depois de mais 15 min');
+});
+
+test('handoff fora do expediente do vendedor: SLA começa na abertura e o cliente sabe quando', async () => {
+  const s = await setup();
+  await s.q(`INSERT INTO users_map (tenant_id, chatwoot_user_id, role, horario) VALUES ($1, 2, 'atendente', '{"dom":[["00:00","00:01"]]}')`, [s.deps.tenantId]);
+  await s.customer('falar com atendente'); await s.drain();
+  const [sla1] = await s.q(`SELECT due_at FROM timers WHERE kind = 'sla1'`);
+  assert.ok(new Date(sla1.due_at).getTime() - Date.now() > 3600e3, 'SLA não começa agora');
+  assert.match(s.outgoing().at(-1)!.content!, /volta domingo/);
+});
+
+test('fora do horário: reativa na abertura e responde dentro da janela de 24h', async () => {
+  const s = await setup({ cfg: (c) => {
+    const a = c.agentes.vendas;
+    a.horario.dias = { dom: [['00:00', '00:01']] };
+    a.horario.responder_fora_do_horario = false;
+    a.horario.msg_ausencia = 'Fechados.';
+  } });
+  await s.customer('oi'); await s.drain();
+  assert.deepEqual(s.outgoing().map((m) => m.content), ['Fechados.']);
+  // abre o expediente e vence o timer de reativação
+  s.config.agentes.vendas.horario.dias = {};
+  await s.q(`UPDATE timers SET due_at = now() WHERE kind = 'reativar'`);
+  await s.drain();
+  assert.equal(s.prompts.length, 1);
+  assert.equal(s.outgoing().length, 2);
+});
+
+test('reativação fora da janela de 24h = transbordo fora_janela, sem mensagem livre', async () => {
+  const s = await setup({ cfg: (c) => {
+    c.agentes.vendas.horario.dias = { dom: [['00:00', '00:01']] };
+    c.agentes.vendas.horario.responder_fora_do_horario = false;
+    c.agentes.vendas.horario.msg_ausencia = 'Fechados.';
+  } });
+  await s.customer('oi'); await s.drain();
+  await s.q(`UPDATE conversation_state SET last_customer_msg_at = now() - interval '25 hours'`);
+  await s.q(`UPDATE timers SET due_at = now() WHERE kind = 'reativar'`);
+  await s.drain();
+  assert.deepEqual((await s.handoffs()).map((h) => h.motivo), ['fora_janela']);
+  assert.equal(s.prompts.length, 0);
+});
+
+test('nextOpen acha a próxima abertura no fuso', () => {
+  const dias = { qui: [['09:00', '18:00']] as [string, string][] };
+  const d = nextOpen(dias, 'America/Sao_Paulo', new Date('2026-11-18T22:00:00Z'));   // qua 19:00 SP
+  assert.equal(d.toISOString(), '2026-11-19T12:00:00.000Z');                           // qui 09:00 SP
+  const aberto = new Date('2026-11-19T13:00:00Z');
+  assert.equal(nextOpen(dias, 'America/Sao_Paulo', aberto), aberto);
 });
