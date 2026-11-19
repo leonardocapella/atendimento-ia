@@ -30,6 +30,7 @@ export const STAGES = ['novo', 'em_qualificacao', 'quente', 'em_negociacao', 'ga
 
 type Run = (sql: string) => Promise<Record<string, unknown>[]>;
 const dir = new URL('../migrations/', import.meta.url);
+const downDir = new URL('../db-down/', import.meta.url);
 const seedFile = new URL('../seeds/demo.sql', import.meta.url);
 
 export async function migrate(run: Run, opts: { seed?: boolean } = {}) {
@@ -55,6 +56,20 @@ export async function migrate(run: Run, opts: { seed?: boolean } = {}) {
   } finally {
     await run('SELECT pg_advisory_unlock(7317)');
   }
+}
+
+// Reverte a última migration aplicada (arquivo em migrations/down/<nome>). Uma transação.
+export async function rollback(run: Run) {
+  const [last] = await run('SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1');
+  if (!last) return null;
+  const name = String(last.name);
+  if (!/^[\w.]+$/.test(name)) throw new Error(`nome de migration inválido: ${name}`);
+  const sql = await readFile(new URL(name, downDir), 'utf8');
+  await run(`BEGIN;\n${sql}\nDELETE FROM schema_migrations WHERE name = '${name}';\nCOMMIT;`).catch(async (e) => {
+    await run('ROLLBACK').catch(() => {});
+    throw new Error(`rollback ${name}: ${e.message}`);
+  });
+  return name;
 }
 
 // Uso: DATABASE_URL=... node src/db.ts [--seed]  (ou SEED_DEMO=true)

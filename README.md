@@ -77,7 +77,7 @@ Anote os resultados no plano antes do F1.
 
 ## Banco do app (brain)
 
-- Migrations em `app/migrations/*.sql`, aplicadas em ordem pelo `api` ao subir (`node src/db.ts`), cada arquivo numa transação. Já aplicadas ficam em `schema_migrations`.
+- Migrations em `app/migrations/*.sql`, aplicadas em ordem pelo `api` ao subir (`node src/db.ts`), cada arquivo numa transação. Já aplicadas ficam em `schema_migrations`. O reverso de cada uma está em `app/db-down/<mesmo nome>.sql` (`rollback()` desfaz a última).
 - `SEED_DEMO=true` no `.env` cria o tenant demo (conta Chatwoot 1), o admin (usuário 1), o "Lorenzo" fictício (usuário 2) e 2 produtos. É idempotente. Em produção, deixe vazio.
 - Rodar à mão: `docker compose exec api node src/db.ts --seed`.
 - Toda tabela tem `tenant_id NOT NULL` e FKs compostas por tenant. RLS entra no F1.5, antes do 2º tenant.

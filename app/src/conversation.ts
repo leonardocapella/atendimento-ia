@@ -25,7 +25,7 @@ export async function startHandoff(q: Query, t: {
   tenant: number; conv: number; motivo: string; justificativa?: string; msg?: string;
   agent: AgentConfig; snapshot?: Record<string, unknown>; labels?: string[]; now?: Date;
 }): Promise<number | null> {
-  const open = await q(`SELECT 1 FROM handoff_events WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND primeira_resposta_em IS NULL`, [t.tenant, t.conv]);
+  const open = await q(`SELECT 1 FROM handoff_events WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND primeira_resposta_em IS NULL AND encerrado_em IS NULL`, [t.tenant, t.conv]);
   if (open.length) return null;
   const tb = t.agent.regras.transbordo, fuso = t.agent.comportamento.fuso, now = t.now ?? new Date();
   const [u] = tb.destino.user_id ? await q(`SELECT horario FROM users_map WHERE tenant_id = $1 AND chatwoot_user_id = $2`, [t.tenant, tb.destino.user_id]) : [];
@@ -66,6 +66,10 @@ export async function onEvent(d: ConvDeps, body: unknown): Promise<string> {
 
     if (ev.kind === 'conv_status') {   // regra 7: resolvida volta com IA ativa, salvo lead quente ou sempre-humano
       if (ev.status !== 'resolved') return 'ignorado';
+      // fecha handoff aberto sem fingir resposta humana: SLA para e um lead novo pode transbordar de novo
+      const hs = await q(`UPDATE handoff_events SET encerrado_em = now() WHERE tenant_id = $1 AND chatwoot_conversation_id = $2
+                          AND primeira_resposta_em IS NULL AND encerrado_em IS NULL RETURNING id`, [T, ev.conv]);
+      if (hs.length) await q(`UPDATE timers SET done_at = now() WHERE tenant_id = $1 AND kind IN ('handoff', 'sla1', 'sla2', 'msg_espera') AND ref_id = ANY($2) AND done_at IS NULL`, [T, hs.map((h) => h.id)]);
       await q(`UPDATE conversation_state s SET pausa_motivo = NULL, audios_pedidos = 0, ia_pausada = coalesce(
                  (SELECT l.estagio = ANY($3) OR l.sempre_humano FROM leads l WHERE l.tenant_id = s.tenant_id AND l.id = s.lead_id), false)
                WHERE s.tenant_id = $1 AND s.chatwoot_conversation_id = $2`, [T, ev.conv, HOT]);

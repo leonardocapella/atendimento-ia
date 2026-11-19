@@ -4,6 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
 COPY migrations ./migrations
+COPY db-down ./db-down
 COPY seeds ./seeds
 COPY config ./config
 COPY public ./public

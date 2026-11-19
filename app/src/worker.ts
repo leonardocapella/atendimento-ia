@@ -18,19 +18,23 @@ export type WorkerDeps = {
   mediaWaitMs?: number;
   log?: { info: (o: object, m: string) => void; error: (o: object, m: string) => void };
 };
-type Timer = { id: number; tenant_id: number; kind: string; ref_id: number; due: string; tentativas: number };
+type Timer = { id: number; tenant_id: number; kind: string; ref_id: number; due: string | Date; tentativas: number };
 const MAX_TENTATIVAS = 3;
 
 export async function claim(db: Db, limit = 10): Promise<Timer[]> {
   return db.q(`UPDATE timers SET locked_until = now() + interval '3 minutes', tentativas = tentativas + 1
     WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM timers WHERE kind <> 'followup' AND done_at IS NULL AND due_at <= now()
       AND (locked_until IS NULL OR locked_until < now()) ORDER BY due_at LIMIT $1 FOR UPDATE SKIP LOCKED)
-    RETURNING id, tenant_id, kind, ref_id, due_at::text AS due, tentativas`, [limit]);
+    RETURNING id, tenant_id, kind, ref_id, due_at AS due, tentativas`, [limit]);
 }
 
 // Se chegou mensagem nova durante o job, due_at mudou: o timer continua pendente e roda de novo.
-const finish = (db: Db, t: Timer) => db.q(`UPDATE timers SET locked_until = NULL, done_at = CASE WHEN due_at::text = $3 THEN now() ELSE done_at END
-  WHERE tenant_id = $1 AND id = $2`, [t.tenant_id, t.id, t.due]);
+const sameDue = (a: unknown, b: unknown) => new Date(a as string).getTime() === new Date(b as string).getTime();
+const finish = async (db: Db, t: Timer) => {
+  const [row] = await db.q(`SELECT due_at AS due FROM timers WHERE tenant_id = $1 AND id = $2`, [t.tenant_id, t.id]);
+  await db.q(`UPDATE timers SET locked_until = NULL, done_at = CASE WHEN $3 THEN now() ELSE done_at END WHERE tenant_id = $1 AND id = $2`,
+    [t.tenant_id, t.id, Boolean(row && sameDue(row.due, t.due))]);
+};
 
 export function isHot(a: AgentConfig, campos: Record<string, unknown>, sinal: boolean): boolean {
   const lq = a.regras.transbordo.lead_quente;
@@ -39,11 +43,16 @@ export function isHot(a: AgentConfig, campos: Record<string, unknown>, sinal: bo
 
 // Regra 4: grava antes de enviar; numa repetição, procura o brain_send_id no Chatwoot antes de reenviar.
 async function sendOnce(d: WorkerDeps, conv: number, trigger: number, kind: string, content: string, file?: { url: string; name: string }) {
-  const [row] = await d.db.q(`INSERT INTO outbound_sends (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) VALUES ($1, $2, $3, $4)
-    ON CONFLICT (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) DO UPDATE SET kind = excluded.kind
-    RETURNING status, brain_send_id, chatwoot_message_id, (xmax = 0) AS novo`, [d.tenantId, conv, trigger, kind]);
+  // ON CONFLICT DO NOTHING: RETURNING só volta se inseriu. xmax=0 mente depois de ON CONFLICT DO UPDATE no Postgres.
+  let [row] = await d.db.q(`INSERT INTO outbound_sends (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) VALUES ($1, $2, $3, $4)
+    ON CONFLICT (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) DO NOTHING
+    RETURNING status, brain_send_id, chatwoot_message_id`, [d.tenantId, conv, trigger, kind]);
+  const novo = Boolean(row);
+  if (!row) [row] = await d.db.q(`SELECT status, brain_send_id, chatwoot_message_id FROM outbound_sends
+    WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND trigger_message_id = $3 AND kind = $4`, [d.tenantId, conv, trigger, kind]);
   if (row.status !== 'pending') return row.status as string;
-  const prev = row.novo ? undefined : (await d.cw.messages(conv)).find((m) => m.content_attributes?.brain_send_id === row.brain_send_id);
+  const sid = String(row.brain_send_id);
+  const prev = novo ? undefined : (await d.cw.messages(conv)).find((m) => String(m.content_attributes?.brain_send_id ?? '') === sid);
   const id = prev?.id ?? (await d.cw.send(conv, content, row.brain_send_id, file));
   await d.db.q(`UPDATE outbound_sends SET status = 'sent', chatwoot_message_id = $5 WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND trigger_message_id = $3 AND kind = $4 AND status = 'pending'`,
     [d.tenantId, conv, trigger, kind, id]);
@@ -70,11 +79,29 @@ async function ask(chat: Chat, msgs: Parameters<Chat>[0]): Promise<Out> {
   throw last;
 }
 
+const MAX_IMG = 5_000_000;
+export async function readCapped(body: ReadableStream<Uint8Array> | null, max = MAX_IMG): Promise<Buffer | null> {
+  if (!body) return null;
+  const chunks: Buffer[] = [];
+  let n = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) { await reader.cancel(); return null; }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
 async function defaultFetchImage(url: string): Promise<string | null> {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!r.ok || Number(r.headers.get('content-length') ?? 0) > 5_000_000) return null;
-    return `data:${r.headers.get('content-type') ?? 'image/jpeg'};base64,${Buffer.from(await r.arrayBuffer()).toString('base64')}`;
+    if (!r.ok || Number(r.headers.get('content-length') ?? 0) > MAX_IMG) return null;
+    const buf = await readCapped(r.body);
+    if (!buf) return null;
+    return `data:${r.headers.get('content-type') ?? 'image/jpeg'};base64,${buf.toString('base64')}`;
   } catch { return null; }
 }
 
@@ -88,6 +115,13 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   const tb = agent.regras.transbordo;
 
   const history = await d.cw.messages(conv);
+  // POST ok + crash antes do UPDATE: a mensagem já está no Chatwoot e o turno some. Marca sent.
+  const pending = await d.db.q(`SELECT trigger_message_id, kind, brain_send_id FROM outbound_sends WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND status = 'pending'`, [T, conv]);
+  for (const p of pending) {
+    const hit = history.find((m) => String(m.content_attributes?.brain_send_id ?? '') === String(p.brain_send_id));
+    if (hit) await d.db.q(`UPDATE outbound_sends SET status = 'sent', chatwoot_message_id = $5 WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND trigger_message_id = $3 AND kind = $4 AND status = 'pending'`,
+      [T, conv, p.trigger_message_id, p.kind, hit.id]);
+  }
   const ausencias = await d.db.q(`SELECT brain_send_id FROM outbound_sends WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND kind = 'ausencia'`, [T, conv]);
   const turn = currentTurn(history, new Set(ausencias.map((r) => r.brain_send_id)));
   if (!turn.length) return 'nada a responder';
@@ -95,9 +129,10 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
 
   // Relê o estado logo antes de cada envio (regra 2): pausa ou mensagem nova = descarta.
   const stale = async () => {
-    const [r] = await d.db.q(`SELECT s.ia_pausada, tm.due_at::text = $3 AS mesmo FROM conversation_state s
-      JOIN timers tm ON tm.tenant_id = s.tenant_id AND tm.id = $4 AND tm.done_at IS NULL
-      WHERE s.tenant_id = $1 AND s.chatwoot_conversation_id = $2`, [T, conv, t.due, t.id]);
+    const [r] = await d.db.q(`SELECT s.ia_pausada, tm.due_at AS due FROM conversation_state s
+      JOIN timers tm ON tm.tenant_id = s.tenant_id AND tm.id = $3 AND tm.done_at IS NULL
+      WHERE s.tenant_id = $1 AND s.chatwoot_conversation_id = $2`, [T, conv, t.id]);
+    if (r) r.mesmo = sameDue(r.due, t.due);
     return !r || r.ia_pausada || !r.mesmo;
   };
   const reply = async (kind: string, text: string) => (await stale() ? 'descartada' : (await sendOnce(d, conv, trigger, kind, text), 'enviada'));
@@ -216,20 +251,28 @@ const mention = (id: number) => `[@atendente](mention://user/${id}/atendente)`; 
 export async function runSla(d: WorkerDeps, t: Timer): Promise<string> {
   const [h] = await d.db.q(`SELECT h.*, s.agent_key FROM handoff_events h JOIN conversation_state s ON s.tenant_id = h.tenant_id AND s.chatwoot_conversation_id = h.chatwoot_conversation_id
     WHERE h.tenant_id = $1 AND h.id = $2`, [d.tenantId, t.ref_id]);
-  if (!h || h.primeira_resposta_em) return 'já respondido';
+  if (!h || h.primeira_resposta_em || h.encerrado_em) return 'já respondido';
   const conv = Number(h.chatwoot_conversation_id), tb = (d.cfg.agentes[h.agent_key] ?? Object.values(d.cfg.agentes)[0]).regras.transbordo;
 
   if (t.kind === 'msg_espera') return (await sendOnce(d, conv, t.id, 'espera', tb.msg_espera), 'espera enviada');
 
   const gestores = (await d.db.q(`SELECT chatwoot_user_id FROM users_map WHERE tenant_id = $1 AND role IN ('gestor', 'admin')`, [d.tenantId])).map((u) => Number(u.chatwoot_user_id));
   const estouro = t.kind === 'sla1' ? 1 : 2;
+  if (Number(h.sla_estouros) >= estouro) return 'já tratado';
+  const min = estouro === 1 ? tb.sla_min : tb.sla2_min;
+  // nota antes do UPDATE: se o Chatwoot cair, o retry ainda vê o estouro em aberto. A linha trava a 2ª nota.
+  const [aviso] = await d.db.q(`INSERT INTO outbound_sends (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) VALUES ($1, $2, $3, $4)
+    ON CONFLICT (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) DO UPDATE SET kind = excluded.kind
+    RETURNING status`, [d.tenantId, conv, h.id, t.kind]);
+  if (aviso.status !== 'sent') {
+    if (estouro === 2 && tb.backup_team_id) await d.cw.assign(conv, { team_id: tb.backup_team_id });
+    await d.cw.addLabels(conv, ['sla-estourado']);
+    const quem = [...new Set([...(h.para_user_id ? [Number(h.para_user_id)] : []), ...gestores])].map(mention).join(' ');
+    await d.cw.note(conv, `⏰ SLA estourado (${min} min sem resposta humana, motivo: ${h.motivo}).${estouro === 2 && tb.backup_team_id ? ' Conversa passada ao time de backup.' : ''} ${quem}`);
+    await d.db.q(`UPDATE outbound_sends SET status = 'sent' WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND trigger_message_id = $3 AND kind = $4`, [d.tenantId, conv, h.id, t.kind]);
+  }
   const [marcado] = await d.db.q(`UPDATE handoff_events SET sla_estouros = $3 WHERE tenant_id = $1 AND id = $2 AND sla_estouros < $3 RETURNING 1`, [d.tenantId, h.id, estouro]);
   if (!marcado) return 'já tratado';
-  const min = estouro === 1 ? tb.sla_min : tb.sla2_min;
-  if (estouro === 2 && tb.backup_team_id) await d.cw.assign(conv, { team_id: tb.backup_team_id });
-  await d.cw.addLabels(conv, ['sla-estourado']);
-  const quem = [...new Set([...(h.para_user_id ? [Number(h.para_user_id)] : []), ...gestores])].map(mention).join(' ');
-  await d.cw.note(conv, `⏰ SLA estourado (${min} min sem resposta humana, motivo: ${h.motivo}).${estouro === 2 && tb.backup_team_id ? ' Conversa passada ao time de backup.' : ''} ${quem}`);
   return `sla${estouro}`;
 }
 

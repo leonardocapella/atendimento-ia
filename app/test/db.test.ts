@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
-import { migrate, STAGES } from '../src/db.ts';
+import { migrate, rollback, STAGES } from '../src/db.ts';
 
 async function fresh() {
   const db = new PGlite();
@@ -50,6 +50,16 @@ test('schema: dedupe de webhook e de envio', async () => {
   const send = () => db.query("INSERT INTO outbound_sends (tenant_id, chatwoot_conversation_id, trigger_message_id, kind) VALUES ($1, 1, 100, 'reply')", [t]);
   await send();
   await assert.rejects(send());
+});
+
+test('rollback: desfaz a última migration e migrate reaplica', async () => {
+  const { db, run } = await fresh();
+  await migrate(run);
+  assert.equal(await rollback(run), '003_revisao.sql');
+  assert.equal((await db.query("SELECT name FROM schema_migrations ORDER BY name")).rows.map((r: any) => r.name).at(-1), '002_t4.sql');
+  const cols = await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'handoff_events' AND column_name = 'encerrado_em'");
+  assert.equal(cols.rows.length, 0);
+  assert.deepEqual(await migrate(run), ['003_revisao.sql']);
 });
 
 test('migrate: SQL quebrado não deixa migration pela metade', async () => {

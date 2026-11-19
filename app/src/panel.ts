@@ -116,7 +116,7 @@ export async function panel(app: FastifyInstance, deps: PanelDeps) {
       return { resposta: await deps.chat([{ role: 'system', content: systemPrompt(agent) }, ...body.data.mensagens]) };
     } catch (e: any) {
       req.log.warn({ err: e.message }, 'playground: falha do LLM');
-      return reply.code(502).send({ erro: 'o LLM não respondeu', detalhe: e.message });
+      return reply.code(502).send({ erro: 'o LLM não respondeu' });
     }
   });
 }

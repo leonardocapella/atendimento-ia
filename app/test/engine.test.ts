@@ -6,7 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { migrate, type Db, type Query } from '../src/db.ts';
 import { loadConfig, type Config } from '../src/agent/config.ts';
 import { onEvent, ensureTenant } from '../src/conversation.ts';
-import { claim, runJob, type WorkerDeps } from '../src/worker.ts';
+import { claim, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
 import { inHours, nextOpen } from '../src/hours.ts';
 import { validName, parseOut, buildMessages } from '../src/agent/prompt.ts';
 import { HttpError, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
@@ -320,6 +320,58 @@ test('SLA: estouro 1 lembra destino e gestor; estouro 2 passa ao backup; cada um
   await s.advance(60); await s.drain();
   assert.equal(notes(s).length, 3);
   assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 2);
+});
+
+test('regra 7: resolvida encerra o handoff; SLA para e um transbordo novo é possível', async () => {
+  const s = await setup();
+  await s.customer('falar com atendente'); await s.drain();
+  const resolve = () => onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId }, { event: 'conversation_status_changed', account: { id: 1 }, id: CONV, status: 'resolved', updated_at: '9' });
+  await resolve();
+  assert.ok((await s.q(`SELECT encerrado_em FROM handoff_events`))[0].encerrado_em);
+  assert.equal((await s.q(`SELECT count(*)::int n FROM timers WHERE kind IN ('sla1','sla2','handoff') AND done_at IS NULL`))[0].n, 0);
+  await s.advance(60); await s.drain();
+  assert.equal(notes(s).filter((n) => /SLA/.test(n)).length, 0);
+  await s.customer('oi de novo');
+  await s.customer('falar com atendente'); await s.drain();
+  assert.equal((await s.handoffs()).length, 2);
+});
+
+test('SLA: nota que falha não marca estouro; retry avisa uma vez', async () => {
+  const s = await setup();
+  await s.customer('falar com atendente'); await s.drain();
+  const orig = s.deps.cw.note.bind(s.deps.cw);
+  s.deps.cw.note = async () => { throw new HttpError(503); };
+  await s.advance(10);
+  await s.drain();
+  assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 0);
+  s.deps.cw.note = orig;
+  await s.q(`UPDATE timers SET due_at = now(), locked_until = NULL, done_at = NULL WHERE kind = 'sla1'`);
+  await s.drain();
+  assert.equal(notes(s).filter((n) => /SLA/.test(n)).length, 1);
+  assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 1);
+});
+
+test('envio: crash depois do POST não reenvia nem perde a mensagem', async () => {
+  const s = await setup();
+  await s.customer('oi');
+  const real = s.deps.cw.send.bind(s.deps.cw);
+  let posts = 0;
+  s.deps.cw.send = async (...a) => { posts++; const id = await real(...a); if (posts === 1) throw new HttpError(503); return id; };
+  await s.drain();
+  assert.equal(posts, 1);
+  assert.equal(s.outgoing().length, 1);
+  await s.q(`UPDATE timers SET due_at = now(), locked_until = NULL, done_at = NULL, tentativas = 0 WHERE kind = 'reply'`);
+  await s.drain();
+  assert.equal(posts, 1, 'retry acha o brain_send_id e não posta de novo');
+  assert.equal(s.outgoing().length, 1);
+  assert.equal((await s.q(`SELECT status FROM outbound_sends WHERE kind = 'reply'`))[0].status, 'sent');
+});
+
+test('readCapped: para acima do teto', async () => {
+  const big = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(100)); c.enqueue(new Uint8Array(100)); c.close(); } });
+  assert.equal(await readCapped(big, 150), null);
+  const ok = new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); c.close(); } });
+  assert.equal((await readCapped(ok, 150))!.length, 3);
 });
 
 test('SLA: para na 1ª resposta humana pública; nota privada e mensagem da IA não param', async () => {
