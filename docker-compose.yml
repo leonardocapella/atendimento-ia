@@ -63,6 +63,7 @@ x-app: &app
     GESTOR_WHATSAPP: ${GESTOR_WHATSAPP:-}
     IA_PAUSAR_NO_TRANSBORDO: ${IA_PAUSAR_NO_TRANSBORDO:-false}
     IA_ATIVA: ${IA_ATIVA:-true}
+    IA_ALLOWLIST: ${IA_ALLOWLIST:-}
     IA_SWITCH_PATH: /data/ia-ativa.json
   networks: [backend, edge]   # edge = saída para internet (LLM, Evolution)
   depends_on:

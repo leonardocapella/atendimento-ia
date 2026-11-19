@@ -4,7 +4,7 @@ import { LlmError, withFallback } from '../src/agent/llm.ts';
 import { alertFromEnv, whatsappAlert } from '../src/alert.ts';
 import { ping } from '../src/monitor.ts';
 import { shouldPing } from '../src/worker.ts';
-import { iaAtiva, iaTravadaOff, pausarNoTransbordo, writeSwitch } from '../src/ia.ts';
+import { allowlist, deveIgnorar, filaBloqueada, iaAtiva, iaTravadaOff, pausarNoTransbordo, writeSwitch } from '../src/ia.ts';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,21 @@ test('IA: padrão segue no transbordo; IA_ATIVA=false trava; o arquivo religa', 
   writeSwitch(false, path);
   assert.equal(iaAtiva({}, path), false);
   assert.equal(iaAtiva({ IA_ATIVA: 'false' }, path), false);
+});
+
+test('grupo nunca; allowlist só os números da lista', () => {
+  const grupo = { sender: { identifier: '120363421@g.us', phone_number: '120363421@g.us' } };
+  assert.equal(deveIgnorar(grupo), 'grupo');
+  assert.equal(deveIgnorar({ conversation: { meta: { sender: { identifier: 'status@broadcast' } } } }), 'grupo');
+  assert.equal(deveIgnorar({ conversation: { contact_inbox: { source_id: '12345@newsletter' } } }), 'grupo');
+  assert.equal(deveIgnorar({ sender: { phone_number: '+5561999990000' } }), null);
+  assert.equal(allowlist({}), null);
+  const env = { IA_ALLOWLIST: '+55 61 98888-7777, 5561977776666' };
+  assert.equal(deveIgnorar({ sender: { phone_number: '+5561988887777' } }, env), null);
+  assert.equal(deveIgnorar({ sender: { phone_number: '+5561911112222', name: 'Ana' } }, env), 'fora da lista');
+  assert.equal(filaBloqueada(['120363@g.us'], env), 'grupo');
+  assert.equal(filaBloqueada(['+5561911112222'], env), 'fora da lista');
+  assert.equal(filaBloqueada(['5561977776666@s.whatsapp.net'], env), null);
 });
 
 test('shouldPing: no máximo 1 por minuto, mesmo com fila cheia', () => {

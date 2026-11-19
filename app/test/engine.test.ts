@@ -7,6 +7,7 @@ import { migrate, type Db, type Query } from '../src/db.ts';
 import { loadConfig, type Config } from '../src/agent/config.ts';
 import { onEvent, ensureTenant } from '../src/conversation.ts';
 import { claim, intencaoClara, readCapped, runJob, type WorkerDeps } from '../src/worker.ts';
+import { deveIgnorar } from '../src/ia.ts';
 import { inHours, nextOpen } from '../src/hours.ts';
 import { validName, parseOut, buildMessages, capFrases, guardReply, fullSystem, primeiraFala } from '../src/agent/prompt.ts';
 import { HttpError, labelList, parseEvent, type Chatwoot, type CwMsg } from '../src/chatwoot.ts';
@@ -59,7 +60,7 @@ async function setup(opts: { replies?: (string | Error)[]; cfg?: (c: Config) => 
   config.agentes.vendas.horario.dias = {};   // sempre aberto
   opts.cfg?.(config);
   const tenantId = await ensureTenant(q, config.chatwoot_account_id);
-  const conv = { db, cfg: config, tenantId } as { db: Db; cfg: Config; tenantId: number; iaLigada?: () => boolean; pausarNoTransbordo?: boolean };
+  const conv = { db, cfg: config, tenantId } as { db: Db; cfg: Config; tenantId: number; iaLigada?: () => boolean; pausarNoTransbordo?: boolean; ignorar?: (b: unknown) => string | null };
   const fake = fakeCw();
   const prompts: Msg[][] = [];
   const replies = [...(opts.replies ?? [])];
@@ -320,6 +321,28 @@ test('webhook do Chatwoot: lista de etiquetas ganha do status', () => {
     changed_attributes: [{ labels: { previous_value: ['ia-pausada'], current_value: [] } }] };
   assert.deepEqual(labelList(body), []);
   assert.equal(parseEvent(body)?.kind, 'labels');
+});
+
+test('grupo do WhatsApp não recebe resposta; número fora da allowlist também não', async () => {
+  const env = { IA_ALLOWLIST: '+55 61 98888-7777' };
+  const caso = async (id: number, convId: number, content: string, sender: object, extra: object = {}) => {
+    const s = await setup();
+    s.conv.ignorar = (b) => deveIgnorar(b, env);
+    s.fake.msgs.push({ id, content, message_type: 0, sender_type: 'Contact', sender });
+    const r = await onEvent(s.conv, { event: 'message_created', account: { id: 1 }, id, content, message_type: 'incoming', sender, conversation: { id: convId, inbox_id: 1, ...extra } });
+    await s.drain();
+    return { r, prompts: s.prompts.length, saida: s.outgoing().length };
+  };
+  const g = await caso(7101, 71, 'oi do grupo', { type: 'contact', id: 3, identifier: '120363999@g.us', phone_number: '120363999@g.us' }, { contact_inbox: { source_id: '120363999@g.us' } });
+  assert.equal(g.r, 'grupo');
+  assert.equal(g.prompts, 0);
+  assert.equal(g.saida, 0);
+  const fora = await caso(7102, 72, 'oi', { type: 'contact', id: 4, phone_number: '+5561911112222' });
+  assert.equal(fora.r, 'fora da lista');
+  assert.equal(fora.prompts, 0);
+  const ok = await caso(7103, 73, 'pode responder', { type: 'contact', id: 5, phone_number: '+5561988887777' });
+  assert.equal(ok.r, 'agendada');
+  assert.equal(ok.prompts, 1);
 });
 
 test('frase de pedido: transbordo imediato sem LLM', async () => {

@@ -10,7 +10,7 @@ import { inHours, nextOpen } from './hours.ts';
 export { inHours };
 import type { Chat } from './agent/llm.ts';
 import { alertFromEnv, type Alert } from './alert.ts';
-import { PAUSE_LABEL, iaAtiva, pausarNoTransbordo } from './ia.ts';
+import { PAUSE_LABEL, filaBloqueada, iaAtiva, pausarNoTransbordo } from './ia.ts';
 import { ping } from './monitor.ts';
 import type { Db } from './db.ts';
 
@@ -131,6 +131,8 @@ export async function runReply(d: WorkerDeps, t: Timer): Promise<string> {
   const tb = agent.regras.transbordo;
 
   const history = await d.cw.messages(conv);
+  const bloqueio = filaBloqueada(history.flatMap((m) => [m.sender?.identifier, m.sender?.phone_number].filter((x): x is string => Boolean(x))));
+  if (bloqueio) return bloqueio;
   // POST ok + crash antes do UPDATE: a mensagem já está no Chatwoot e o turno some. Marca sent.
   const pending = await d.db.q(`SELECT trigger_message_id, kind, brain_send_id FROM outbound_sends WHERE tenant_id = $1 AND chatwoot_conversation_id = $2 AND status = 'pending'`, [T, conv]);
   for (const p of pending) {

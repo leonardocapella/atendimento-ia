@@ -3,10 +3,10 @@
 import { parseEvent } from './chatwoot.ts';
 import type { AgentConfig, Config } from './agent/config.ts';
 import { nextOpen, quando, type Dias } from './hours.ts';
-import { PAUSE_LABEL, iaAtiva, pausarNoTransbordo } from './ia.ts';
+import { PAUSE_LABEL, deveIgnorar, iaAtiva, pausarNoTransbordo } from './ia.ts';
 import type { Db, Query } from './db.ts';
 
-export type ConvDeps = { db: Db; cfg: Config; tenantId: number; pausarNoTransbordo?: boolean; iaLigada?: () => boolean };
+export type ConvDeps = { db: Db; cfg: Config; tenantId: number; pausarNoTransbordo?: boolean; iaLigada?: () => boolean; ignorar?: (b: unknown) => string | null };
 const norm = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
 // Etiqueta ia-pausada posta por humano pausa esta conversa.
@@ -125,7 +125,9 @@ export async function onEvent(d: ConvDeps, body: unknown): Promise<string> {
       return 'humano';
     }
 
-    // cliente
+    // cliente. Grupo (@g.us), status e broadcast nunca. Allowlist corta o resto.
+    const bloqueio = (d.ignorar ?? deveIgnorar)(body);
+    if (bloqueio) return bloqueio;
     if (ev.contactId == null) return 'sem contato';
     const [lead] = await q(`INSERT INTO leads (tenant_id, chatwoot_contact_id) VALUES ($1, $2)
                             ON CONFLICT (tenant_id, chatwoot_contact_id) DO UPDATE SET chatwoot_contact_id = excluded.chatwoot_contact_id

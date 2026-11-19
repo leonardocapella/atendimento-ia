@@ -4,7 +4,7 @@
 export type Author = 'cliente' | 'ia' | 'humano' | null;   // null = atividade, template, nota privada
 export type CwMsg = {
   id: number; content: string | null; message_type: number | string; private?: boolean;
-  sender_type?: string; sender?: { type?: string; name?: string };
+  sender_type?: string; sender?: { type?: string; name?: string; phone_number?: string; identifier?: string };
   attachments?: { file_type: string; data_url?: string }[];
   content_attributes?: { in_reply_to?: number; brain_send_id?: string } | null;
 };
