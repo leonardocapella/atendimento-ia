@@ -2,11 +2,14 @@ import Fastify from 'fastify';
 import pg from 'pg';
 import Redis from 'ioredis';
 import { secretOk, eventMeta } from './hooks.ts';
+import { panel, chatwootProfile, type PanelDeps } from './panel.ts';
+import { loadConfig } from './agent/config.ts';
+import { llmEnv, openaiChat } from './agent/llm.ts';
 
 type Ping = () => Promise<unknown>;
 
 // Deps injetáveis só para teste; produção usa Postgres/Redis reais.
-export function buildApp(deps?: { pingDb: Ping; pingRedis: Ping }) {
+export function buildApp(deps?: { pingDb: Ping; pingRedis: Ping; panel?: PanelDeps }) {
   const app = Fastify({
     bodyLimit: 1_000_000,
     logger: {
@@ -24,6 +27,18 @@ export function buildApp(deps?: { pingDb: Ping; pingRedis: Ping }) {
     pingDb = () => db.query('select 1');
     pingRedis = async () => { if (redis.status !== 'ready') await redis.connect().catch(() => {}); return redis.ping(); };
     app.addHook('onClose', async () => { await db.end(); redis.disconnect(); });
+
+    const llm = llmEnv();
+    const panelDeps: PanelDeps = {
+      query: async (sql, params) => (await db.query(sql, params)).rows,
+      config: loadConfig(),   // config inválida derruba a subida com a linha do erro
+      chat: llm.baseUrl && llm.model ? openaiChat(llm.baseUrl, llm.model, process.env.LLM_API_KEY) : undefined,
+      fetchProfile: chatwootProfile,
+    };
+    app.register(async (i) => panel(i, panelDeps));
+  } else if (deps.panel) {
+    const p = deps.panel;
+    app.register(async (i) => panel(i, p));
   }
 
   app.get('/health', async (_req, reply) => {

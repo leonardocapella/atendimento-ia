@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F1 em andamento** (T2: banco do app pronto). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2 banco e T3 config + painel prontos). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -81,6 +81,13 @@ Anote os resultados no plano antes do F1.
 - `SEED_DEMO=true` no `.env` cria o tenant demo (conta Chatwoot 1), o admin (usuário 1), o "Lorenzo" fictício (usuário 2) e 2 produtos. É idempotente. Em produção, deixe vazio.
 - Rodar à mão: `docker compose exec api node src/db.ts --seed`.
 - Toda tabela tem `tenant_id NOT NULL` e FKs compostas por tenant. RLS entra no F1.5, antes do 2º tenant.
+
+## Agente e painel
+
+- **Config do agente:** `app/config/ebm.yaml` (4 etapas: comportamento, regras, conhecimento, horário). É validada na subida; um campo errado impede o app de subir e o log aponta o caminho (ex.: `agentes.vendas.comportamento.nome`). Para mudar, edite o arquivo e rode `docker compose up -d --build api worker`. O exemplo é fictício: troque pelos textos exportados do FabChat.
+- **LLM:** `LLM_BASE_URL`, `LLM_MODEL` e `LLM_API_KEY` no `.env` (qualquer API compatível com OpenAI: 9router, Ollama `/v1`, Groq, Gemini). Sem eles, o playground fica desligado.
+- **Painel:** https://painel.localhost. Entra com o **access token do Chatwoot** (Perfil > Configurações do perfil > Token de acesso); o app nunca vê a senha. Admin e gestor veem a config (só leitura) e o playground; atendente não. O papel vem do Chatwoot, e `users_map.role` tem prioridade (é onde se define `gestor`).
+- O playground não envia nada ao cliente nem grava no banco. Com provedor não aprovado para produção, use só dados fictícios.
 
 ## Testes
 

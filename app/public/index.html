@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- ponytail: painel F1 em HTML puro (config só leitura + playground). Vira React+Vite+shadcn no F1.5, com o editor das 4 etapas. -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel Atendimento IA</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fafafa; --fg: #1a1a1a; --mute: #666; --card: #fff; --line: #ddd; --acc: #2563eb; --err: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --mute: #999; --card: #1b1b1b; --line: #333; --acc: #60a5fa; --err: #f87171; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  h1 { font-size: 20px; } h2 { font-size: 17px; margin-top: 0; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  input, textarea, select, button { font: inherit; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  input, textarea { width: 100%; }
+  button { background: var(--acc); color: #fff; border: 0; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  pre { white-space: pre-wrap; background: var(--bg); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .mute { color: var(--mute); } .err { color: var(--err); }
+  .msg { padding: 8px 12px; border-radius: 8px; margin: 6px 0; max-width: 85%; white-space: pre-wrap; }
+  .user { background: var(--acc); color: #fff; margin-left: auto; } .assistant { border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; } .row > :first-child { flex: 1; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Painel Atendimento IA</h1>
+
+  <section id="login">
+    <h2>Entrar</h2>
+    <form id="loginForm">
+      <label for="token">Access token do Chatwoot</label>
+      <input id="token" type="password" autocomplete="off" required>
+      <p class="mute">No Chatwoot: Perfil (avatar) &gt; Configurações do perfil &gt; Token de acesso.</p>
+      <button>Entrar</button> <span id="loginErr" class="err" role="alert"></span>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <p class="mute">Papel: <b id="papel"></b> · <a href="#" id="sair">sair</a></p>
+
+    <section id="cfgSec">
+      <h2>Agentes <span class="mute" id="versao"></span></h2>
+      <p class="mute">Somente leitura. Para mudar, edite <code>app/config/ebm.yaml</code> e reinicie o app.</p>
+      <p id="llm"></p>
+      <label for="agente">Agente</label>
+      <select id="agente"></select>
+      <h3>Prompt gerado</h3><pre id="prompt"></pre>
+      <details><summary>Configuração completa (4 etapas)</summary><pre id="cfg"></pre></details>
+    </section>
+
+    <section id="playSec">
+      <h2>Playground</h2>
+      <p class="mute">Teste sem enviar nada ao cliente. Não cole dados reais de clientes se o provedor não estiver aprovado para produção.</p>
+      <div id="chat" aria-live="polite"></div>
+      <form id="playForm" class="row">
+        <input id="msg" placeholder="Escreva como se fosse o cliente" required aria-label="Mensagem">
+        <button>Enviar</button>
+      </form>
+      <p><a href="#" id="limpar">Limpar conversa</a> <span id="playErr" class="err" role="alert"></span></p>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (path, body) => {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data.erro || 'erro ' + r.status), { status: r.status });
+  return data;
+};
+let cfg, conversa = [];
+
+async function iniciar() {
+  try {
+    const me = await api('/api/me');
+    $('login').hidden = true; $('app').hidden = false; $('papel').textContent = me.papel;
+    if (me.papel === 'atendente') { $('cfgSec').hidden = $('playSec').hidden = true; return; }
+    cfg = await api('/api/config');
+    $('versao').textContent = 'versão ' + cfg.versao;
+    $('llm').textContent = cfg.llm.configurado
+      ? `LLM: ${cfg.llm.modelo} em ${cfg.llm.base_url}` + (cfg.llm.aprovado_para_producao ? ' (aprovado para produção)' : ' (somente teste)')
+      : 'LLM não configurado: o playground fica desligado.';
+    $('agente').replaceChildren(...Object.entries(cfg.agentes).map(([k, a]) => new Option(a.nome_interno, k)));
+    mostrar();
+  } catch { $('login').hidden = false; $('app').hidden = true; }
+}
+function mostrar() {
+  const { prompt, ...resto } = cfg.agentes[$('agente').value];
+  $('prompt').textContent = prompt;
+  $('cfg').textContent = JSON.stringify(resto, null, 2);
+  conversa = []; $('chat').replaceChildren();
+}
+function bolha(role, text) {
+  const d = document.createElement('div'); d.className = 'msg ' + role; d.textContent = text; $('chat').append(d);
+}
+$('loginForm').onsubmit = async (e) => {
+  e.preventDefault(); $('loginErr').textContent = '';
+  try { await api('/api/login', { token: $('token').value }); $('token').value = ''; iniciar(); }
+  catch (err) { $('loginErr').textContent = err.message; }
+};
+$('sair').onclick = async (e) => { e.preventDefault(); await api('/api/logout', {}); location.reload(); };
+$('agente').onchange = mostrar;
+$('limpar').onclick = (e) => { e.preventDefault(); conversa = []; $('chat').replaceChildren(); };
+$('playForm').onsubmit = async (e) => {
+  e.preventDefault(); $('playErr').textContent = '';
+  const text = $('msg').value; $('msg').value = '';
+  conversa.push({ role: 'user', content: text }); bolha('user', text);
+  const btn = e.submitter; btn.disabled = true;
+  try {
+    const r = await api('/api/playground', { agente: $('agente').value, mensagens: conversa });
+    conversa.push({ role: 'assistant', content: r.resposta }); bolha('assistant', r.resposta);
+  } catch (err) { conversa.pop(); $('chat').lastChild.remove(); $('msg').value = text; $('playErr').textContent = err.message; }
+  finally { btn.disabled = false; }
+};
+iniciar();
+</script>
+</body>
+</html>
