@@ -13,6 +13,15 @@ CRED=.codespace-credenciais.txt
 INSTANCIA=${EVOLUTION_INSTANCE:-teste}
 INBOX="WhatsApp Teste"
 
+# Sessão por `gh codespace ssh` não herda os secrets: lê do arquivo do Codespaces (valores em base64)
+SEGREDOS=/workspaces/.codespaces/shared/.env-secrets
+for k in GEMINI_API_KEY CODESPACE_NAME GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN; do
+  if [ -z "${!k:-}" ] && [ -r "$SEGREDOS" ]; then
+    v=$(grep "^$k=" "$SEGREDOS" | head -1 | cut -d= -f2- | base64 -d 2>/dev/null || true)
+    [ -n "$v" ] && export "$k=$v"
+  fi
+done
+
 log() { printf '\n==> %s\n' "$*"; }
 espera_docker() { for _ in $(seq 60); do docker info >/dev/null 2>&1 && return; sleep 2; done; echo "Docker não respondeu" >&2; exit 1; }
 
