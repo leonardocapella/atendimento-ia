@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F0 (infra)**. O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2: banco do app pronto). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -74,6 +74,13 @@ Com os dois webhooks configurados, faça os testes e veja `docker compose logs a
 | OV-F6 | Mensagem enviada pelo token do bot vs token de admin | `sender_type` = `agent_bot` vs `user`; qual token consegue atribuir uma conversa? |
 
 Anote os resultados no plano antes do F1.
+
+## Banco do app (brain)
+
+- Migrations em `app/migrations/*.sql`, aplicadas em ordem pelo `api` ao subir (`node src/db.ts`), cada arquivo numa transação. Já aplicadas ficam em `schema_migrations`.
+- `SEED_DEMO=true` no `.env` cria o tenant demo (conta Chatwoot 1), o admin (usuário 1), o "Lorenzo" fictício (usuário 2) e 2 produtos. É idempotente. Em produção, deixe vazio.
+- Rodar à mão: `docker compose exec api node src/db.ts --seed`.
+- Toda tabela tem `tenant_id NOT NULL` e FKs compostas por tenant. RLS entra no F1.5, antes do 2º tenant.
 
 ## Testes
 

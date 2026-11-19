@@ -52,6 +52,7 @@ x-app: &app
     LLM_MODEL: ${LLM_MODEL:-}
     LLM_API_KEY: ${LLM_API_KEY:-}
     LLM_APPROVED_FOR_PRODUCTION: ${LLM_APPROVED_FOR_PRODUCTION:-false}
+    SEED_DEMO: ${SEED_DEMO:-}
   networks: [backend, edge]   # edge = saída para internet (LLM, Telegram)
   depends_on:
     postgres: { condition: service_healthy }
@@ -118,7 +119,8 @@ services:
 
   api:
     <<: *app
-    command: ["node", "src/server.ts"]
+    # migra (e, com SEED_DEMO=true, cria o tenant demo) antes de abrir a porta
+    command: ["sh", "-c", "node src/db.ts && exec node src/server.ts"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
       interval: 30s
