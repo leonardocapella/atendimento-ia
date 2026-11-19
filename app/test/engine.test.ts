@@ -322,6 +322,18 @@ test('SLA: estouro 1 lembra destino e gestor; estouro 2 passa ao backup; cada um
   assert.equal((await s.q(`SELECT sla_estouros FROM handoff_events`))[0].sla_estouros, 2);
 });
 
+test('SLA: alerta Telegram sai uma vez por estouro e não depende do Chatwoot', async () => {
+  const s = await setup();
+  const avisos: string[] = [];
+  s.deps.alert = async (t) => { avisos.push(t); };
+  await s.customer('falar com atendente'); await s.drain();
+  await s.advance(10); await s.drain();
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0], /SLA 1/);
+  await s.advance(60); await s.drain();
+  assert.equal(avisos.length, 2);
+});
+
 test('regra 7: resolvida encerra o handoff; SLA para e um transbordo novo é possível', async () => {
   const s = await setup();
   await s.customer('falar com atendente'); await s.drain();

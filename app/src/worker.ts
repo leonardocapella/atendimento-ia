@@ -9,6 +9,7 @@ import type { AgentConfig, Config } from './agent/config.ts';
 import { inHours, nextOpen } from './hours.ts';
 export { inHours };
 import type { Chat } from './agent/llm.ts';
+import { alertFromEnv, type Alert } from './alert.ts';
 import type { Db } from './db.ts';
 
 export type WorkerDeps = {
@@ -17,6 +18,7 @@ export type WorkerDeps = {
   fetchImage?: (url: string) => Promise<string | null>;
   mediaWaitMs?: number;
   log?: { info: (o: object, m: string) => void; error: (o: object, m: string) => void };
+  alert?: Alert | null;
 };
 type Timer = { id: number; tenant_id: number; kind: string; ref_id: number; due: string | Date; tentativas: number };
 const MAX_TENTATIVAS = 3;
@@ -273,6 +275,7 @@ export async function runSla(d: WorkerDeps, t: Timer): Promise<string> {
   }
   const [marcado] = await d.db.q(`UPDATE handoff_events SET sla_estouros = $3 WHERE tenant_id = $1 AND id = $2 AND sla_estouros < $3 RETURNING 1`, [d.tenantId, h.id, estouro]);
   if (!marcado) return 'já tratado';
+  await d.alert?.(`SLA ${estouro} estourado. Conversa ${conv}, motivo ${h.motivo}, ${min} min.`).catch((e) => d.log?.error({ err: e.message }, 'alerta telegram falhou'));
   return `sla${estouro}`;
 }
 
@@ -309,9 +312,11 @@ export async function runJob(d: WorkerDeps, t: Timer): Promise<string> {
       const [st] = await d.db.q(`SELECT agent_key FROM conversation_state WHERE tenant_id = $1 AND chatwoot_conversation_id = $2`, [d.tenantId, t.ref_id]);
       const agent = d.cfg.agentes[st?.agent_key] ?? Object.values(d.cfg.agentes)[0];
       await d.db.tx((q) => startHandoff(q, { tenant: d.tenantId, conv: t.ref_id, motivo: 'falha_tecnica', justificativa: e.message, agent, labels: ['ia-falhou-envio'] }));
+      await d.alert?.(`Falha de envio ao Chatwoot. Conversa ${t.ref_id}. ${e.message}`).catch(() => {});
       return 'transbordo (falha de envio)';
     }
-    return 'falhou';   // ponytail: transbordo que falhou 3x só fica no log; o alerta independente entra no T9 (Telegram)
+    await d.alert?.(`Job ${t.kind} falhou ${MAX_TENTATIVAS}x. ref ${t.ref_id}. ${e.message}`).catch(() => {});
+    return 'falhou';
   }
 }
 
@@ -339,6 +344,7 @@ if (import.meta.main) {
     cw: chatwootClient(process.env.CHATWOOT_URL ?? 'http://chatwoot:3000', config.chatwoot_account_id, process.env.CHATWOOT_BOT_TOKEN ?? '', process.env.CHATWOOT_ADMIN_TOKEN ?? ''),
     chat: llm.baseUrl && llm.model ? openaiChat(llm.baseUrl, llm.model, process.env.LLM_API_KEY) : undefined,
     llm: { provider: llm.baseUrl ? new URL(llm.baseUrl).host : 'nenhum', model: llm.model || 'nenhum' },
+    alert: alertFromEnv(),
   };
   let running = true;
   for (const s of ['SIGTERM', 'SIGINT'] as const) process.once(s, () => { running = false; });
