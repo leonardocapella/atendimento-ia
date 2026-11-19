@@ -43,6 +43,13 @@
   <div id="app" hidden>
     <p class="mute">Papel: <b id="papel"></b> · <a href="#" id="sair">sair</a></p>
 
+    <section id="iaSec">
+      <h2>IA</h2>
+      <p id="iaEstado" class="mute"></p>
+      <button type="button" id="iaToggle">Desligar a IA</button>
+      <span id="iaErr" class="err" role="alert"></span>
+    </section>
+
     <section id="cfgSec">
       <h2>Agentes <span class="mute" id="versao"></span></h2>
       <p class="mute">Somente leitura. Para mudar, edite <code>app/config/ebm.yaml</code> e reinicie o app.</p>
@@ -67,8 +74,10 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const api = async (path, body) => {
-  const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+const api = async (path, body, method) => {
+  const r = await fetch(path, body != null || method
+    ? { method: method || 'POST', headers: { 'content-type': 'application/json' }, body: body != null ? JSON.stringify(body) : undefined }
+    : {});
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.erro || 'erro ' + r.status), { status: r.status });
   return data;
@@ -79,7 +88,8 @@ async function iniciar() {
   try {
     const me = await api('/api/me');
     $('login').hidden = true; $('app').hidden = false; $('papel').textContent = me.papel;
-    if (me.papel === 'atendente') { $('cfgSec').hidden = $('playSec').hidden = true; return; }
+    if (me.papel === 'atendente') { $('cfgSec').hidden = $('playSec').hidden = $('iaSec').hidden = true; return; }
+    await mostrarIa();
     cfg = await api('/api/config');
     $('versao').textContent = 'versão ' + cfg.versao;
     $('llm').textContent = cfg.llm.configurado
@@ -89,6 +99,19 @@ async function iniciar() {
     mostrar();
   } catch { $('login').hidden = false; $('app').hidden = true; }
 }
+async function mostrarIa() {
+  const ia = await api('/api/ia');
+  $('iaEstado').textContent = ia.travada ? 'IA travada desligada por IA_ATIVA=false no ambiente.'
+    : ia.ativa ? 'IA ligada em todas as conversas.' : 'IA desligada em todas as conversas.';
+  $('iaToggle').textContent = ia.ativa ? 'Desligar a IA' : 'Ligar a IA';
+  $('iaToggle').disabled = ia.travada;
+  $('iaToggle').dataset.ativa = ia.ativa ? '1' : '0';
+}
+$('iaToggle').onclick = async () => {
+  $('iaErr').textContent = '';
+  try { await api('/api/ia', { ativa: $('iaToggle').dataset.ativa !== '1' }); await mostrarIa(); }
+  catch (err) { $('iaErr').textContent = err.message; }
+};
 function mostrar() {
   const { prompt, ...resto } = cfg.agentes[$('agente').value];
   $('prompt').textContent = prompt;

@@ -31,6 +31,7 @@ agentes:
         - Nunca transfira e faça uma pergunta na mesma fala. Se falta um campo, só pergunte.
         - Se o nome do perfil do WhatsApp for um nome de pessoa, use-o. Não pergunte o nome de novo.
         - sinal_compra só com intenção clara de fechar, proposta ou orçamento. Medidas, prazo ou "quanto custa" não bastam.
+        - "Fora do que a EBM faz (ex.: armário para carro), não transfira. Explique com educação que a EBM faz armários sob medida para casa, em Brasília e região, e siga."
       regras_negocio:
         - Orçamento só com medidas; sem medidas, ofereça a visita técnica.
       nao_prometer:

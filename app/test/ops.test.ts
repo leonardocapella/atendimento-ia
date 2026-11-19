@@ -4,6 +4,10 @@ import { LlmError, withFallback } from '../src/agent/llm.ts';
 import { alertFromEnv, whatsappAlert } from '../src/alert.ts';
 import { ping } from '../src/monitor.ts';
 import { shouldPing } from '../src/worker.ts';
+import { iaAtiva, iaTravadaOff, pausarNoTransbordo, writeSwitch } from '../src/ia.ts';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('whatsapp: sem número não envia; com a instância manda só ao gestor e corta em 4000', async () => {
   assert.equal(alertFromEnv({}), null);
@@ -50,6 +54,17 @@ test('fallback: 429 tenta o próximo; 500 não tenta; sem fallback o 429 sobe', 
   await assert.rejects(withFallback(targets, 1000, http(() => 500))!([{ role: 'user', content: 'x' }]), /LLM respondeu 500/);
   assert.deepEqual(alvos, ['gemini.test']);
   await assert.rejects(withFallback([targets[0]], 1000, http(() => 429))!([{ role: 'user', content: 'x' }]), /LLM respondeu 429/);
+});
+
+test('IA: padrão segue no transbordo; IA_ATIVA=false trava; o arquivo religa', () => {
+  assert.equal(pausarNoTransbordo({}), false);
+  assert.equal(pausarNoTransbordo({ IA_PAUSAR_NO_TRANSBORDO: 'true' }), true);
+  assert.equal(iaTravadaOff({ IA_ATIVA: 'false' }), true);
+  const path = join(mkdtempSync(join(tmpdir(), 'ia-')), 's.json');
+  assert.equal(iaAtiva({}, path), true);
+  writeSwitch(false, path);
+  assert.equal(iaAtiva({}, path), false);
+  assert.equal(iaAtiva({ IA_ATIVA: 'false' }, path), false);
 });
 
 test('shouldPing: no máximo 1 por minuto, mesmo com fila cheia', () => {

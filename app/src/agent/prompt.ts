@@ -89,7 +89,7 @@ export function fullSystem(a: AgentConfig, c: Ctx): string {
 Responda SOMENTE com um JSON:
 {"resposta": "texto para o cliente", "decisao": "responder" | "transferir", "motivo": null | ${MOTIVOS_LLM.map((m) => `"${m}"`).join(' | ')}, "justificativa": null | "por quê",
  "campos": {${chaves.map((k) => `"${k}": valor ou null`).join(', ')}}, "sinal_compra": true só se o cliente quer fechar, proposta ou orçamento (medidas, prazo ou "quanto custa" não bastam), "enviar_produtos": ["código"]}
-Pedido de preço não é transbordo. Transfira só por um motivo da lista. Nunca transfira e faça uma pergunta na mesma fala: se falta campo, decisao é responder. No máximo 3 frases.`,
+Pedido de preço não é transbordo. Fora do que a empresa faz (ex.: armário para carro) também não: explique com educação e deixe decisao em responder. Transfira só por um motivo da lista. Nunca transfira e faça uma pergunta na mesma fala: se falta campo, decisao é responder. No máximo 3 frases.`,
   ].filter(Boolean).join('\n');
 }
 

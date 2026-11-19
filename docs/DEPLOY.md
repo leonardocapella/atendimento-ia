@@ -40,6 +40,8 @@ Senha que entra em URL tem que ser hex. Base64 quebra a conexão.
 | `LLM_FALLBACK_BASE_URL` | vazio = sem fallback. API compatível com OpenAI, plano grátis |
 | `LLM_FALLBACK_MODEL` | modelo desse provedor. Só entra quando o principal responde 429 |
 | `LLM_FALLBACK_API_KEY` | chave do fallback. Vazio se o provedor não pede |
+| `IA_PAUSAR_NO_TRANSBORDO` | `false` (padrão). Transbordo atribui, anota e marca prioridade, e a Malu continua. `true` pausa e põe a etiqueta `ia-pausada` |
+| `IA_ATIVA` | `false` trava a IA desligada em todas as conversas. `true` ou vazio: o painel liga e desliga sem reiniciar |
 | `SEED_DEMO` | vazio em produção. `true` só cria tenant, Lorenzo fictício (usuário 2) e 2 produtos de exemplo |
 | `HEALTHCHECK_URL` | URL do check grátis no healthchecks.io. Vazio = worker não pinga |
 | `SMTP_*` | opcional. E-mail do Chatwoot |
@@ -80,6 +82,7 @@ Aponte `chat.` e `painel.` para a VPS. O Caddy emite o certificado. Firewall: 22
 
 - Chatwoot: `https://chat.seudominio`
 - Painel: `https://painel.seudominio` — login com o access token do Chatwoot (Perfil > Token de acesso). Admin e gestor veem a config (só leitura) e o playground. Atendente não.
+- Interruptor da IA, só nesta máquina: `http://127.0.0.1:8081` (túnel SSH na VPS). Admin e gestor ligam e desligam sem reiniciar. O worker lê o mesmo arquivo. `IA_ATIVA=false` trava desligada e o botão recusa.
 
 `/health` e `/hooks/*` não são públicos. O Caddy responde 404.
 
@@ -127,6 +130,18 @@ ON CONFLICT DO NOTHING;
 Troque `2` pelo ID real. Outra linha com `role = 'gestor'` para quem deve ser mencionado no estouro de SLA.
 
 Não ligue `status: live` no YAML enquanto `LLM_APPROVED_FOR_PRODUCTION` não for `true`.
+
+## Quem para a IA
+
+Com `IA_PAUSAR_NO_TRANSBORDO=false` (padrão), lead quente e pedido de humano atribuem a conversa ao Lorenzo, com nota privada e prioridade. A etiqueta `ia-pausada` não entra. A Malu continua respondendo.
+
+Três cortes, todos manuais:
+
+1. **Uma conversa.** No Chatwoot, adicione a etiqueta `ia-pausada`. Tirar a etiqueta retoma. Fala do Lorenzo não pausa.
+2. **Todas.** No painel (`http://127.0.0.1:8081`), o botão grava o estado num volume compartilhado por `api` e `worker`. Vale na hora, sem reiniciar.
+3. **Trava.** `IA_ATIVA=false` no `.env` e recrie os containers. O botão do painel não consegue ligar por cima.
+
+Pedido fora do que a EBM faz (ex.: armário para carro) não transfere. A Malu explica o que a empresa faz e segue.
 
 ## 7. WhatsApp por QR (Evolution)
 

@@ -1,12 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { buildApp } from '../src/server.ts';
 import { loadConfig, parseConfig } from '../src/agent/config.ts';
 import type { PanelDeps } from '../src/panel.ts';
 
 process.env.MASTER_KEY = 'a'.repeat(64);
+process.env.IA_SWITCH_PATH = join(mkdtempSync(join(tmpdir(), 'ia-')), 'ia.json');
+delete process.env.IA_ATIVA;
 const ok = async () => 1;
 const yamlText = readFileSync(new URL('../config/ebm.yaml', import.meta.url), 'utf8');
 
@@ -51,6 +55,22 @@ test('config: erros apontam o caminho do campo', () => {
     mutate(bad.agentes.vendas);
     assert.throws(() => parseConfig(stringify(bad)), re);
   }
+});
+
+test('interruptor: admin desliga e liga a IA sem reiniciar; atendente não mexe', async () => {
+  const { app } = make();
+  const admin = await login(app, 'tok-admin-123');
+  const get = () => app.inject({ url: '/api/ia', headers: { cookie: admin.cookie } });
+  assert.equal((await get()).json().ativa, true);
+  const off = await app.inject({ method: 'POST', url: '/api/ia', headers: { cookie: admin.cookie }, payload: { ativa: false } });
+  assert.equal(off.json().ativa, false);
+  assert.equal((await get()).json().ativa, false);
+  const on = await app.inject({ method: 'POST', url: '/api/ia', headers: { cookie: admin.cookie }, payload: { ativa: true } });
+  assert.equal(on.json().ativa, true);
+
+  const agent = await login(app, 'tok-agent-123');
+  assert.equal((await app.inject({ method: 'POST', url: '/api/ia', headers: { cookie: agent.cookie }, payload: { ativa: false } })).statusCode, 403);
+  await app.close();
 });
 
 test('login: token recusado = 401, outra conta = 403, sem sessão = 401', async () => {

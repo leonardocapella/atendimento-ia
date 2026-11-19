@@ -21,7 +21,17 @@ export type Ev =
   | { kind: 'msg'; key: string; account?: number; conv: number; inbox?: number; id: number; author: Author;
       contactId?: number; senderName?: string; text: string; files: string[] }
   | { kind: 'msg_status'; key: string; account?: number; id: number; delivered: boolean; failed: boolean }
-  | { kind: 'conv_status'; key: string; account?: number; conv: number; status: string };
+  | { kind: 'conv_status'; key: string; account?: number; conv: number; status: string }
+  | { kind: 'labels'; key: string; account?: number; conv: number; labels: string[] };
+
+// conversation_updated traz a lista atual, ou changed_attributes.labels = [antes, depois].
+export function labelList(b: any): string[] | null {
+  if (Array.isArray(b?.labels)) return b.labels.map(String);
+  const ch = b?.changed_attributes?.labels;
+  if (Array.isArray(ch?.[1])) return ch[1].map(String);
+  if (Array.isArray(ch?.current_value)) return ch.current_value.map(String);
+  return null;
+}
 
 export function parseEvent(b: any): Ev | null {
   const account = b?.account?.id ?? b?.account_id;
@@ -39,6 +49,10 @@ export function parseEvent(b: any): Ev | null {
   }
   if ((b?.event === 'conversation_status_changed' || b?.event === 'conversation_updated') && b.id && b.status)
     return { kind: 'conv_status', key: `conv:${b.id}:${b.status}:${b.updated_at ?? ''}`, account, conv: b.id, status: b.status };
+  if (b?.event === 'conversation_updated' && b.id) {
+    const labels = labelList(b);
+    if (labels) return { kind: 'labels', key: `lbl:${b.id}:${[...labels].sort().join(',')}:${b.updated_at ?? ''}`, account, conv: b.id, labels };
+  }
   return null;
 }
 

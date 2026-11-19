@@ -59,6 +59,7 @@ async function setup(opts: { replies?: (string | Error)[]; cfg?: (c: Config) => 
   config.agentes.vendas.horario.dias = {};   // sempre aberto
   opts.cfg?.(config);
   const tenantId = await ensureTenant(q, config.chatwoot_account_id);
+  const conv = { db, cfg: config, tenantId } as { db: Db; cfg: Config; tenantId: number; iaLigada?: () => boolean; pausarNoTransbordo?: boolean };
   const fake = fakeCw();
   const prompts: Msg[][] = [];
   const replies = [...(opts.replies ?? [])];
@@ -70,7 +71,7 @@ async function setup(opts: { replies?: (string | Error)[]; cfg?: (c: Config) => 
   const customer = async (content: string, extra: Partial<CwMsg> & { name?: string } = {}) => {
     const m: CwMsg = { id: nextId++, content, message_type: 0, sender_type: 'Contact', sender: { type: 'contact', name: extra.name ?? 'Mateus Souza' }, ...extra };
     fake.msgs.push(m);
-    return onEvent({ db, cfg: config, tenantId }, { event: 'message_created', account: { id: 1 }, id: m.id, content, message_type: 'incoming', private: false,
+    return onEvent(conv, { event: 'message_created', account: { id: 1 }, id: m.id, content, message_type: 'incoming', private: false,
       sender: { type: 'contact', id: CONTACT, name: m.sender!.name }, conversation: { id: CONV, inbox_id: 1 }, attachments: m.attachments ?? [], content_attributes: m.content_attributes });
   };
   const human = async (content: string, isPrivate = false) => {
@@ -98,7 +99,7 @@ async function setup(opts: { replies?: (string | Error)[]; cfg?: (c: Config) => 
   const state = async () => (await q(`SELECT * FROM conversation_state WHERE chatwoot_conversation_id = $1`, [CONV]))[0];
   const handoffs = () => q(`SELECT motivo FROM handoff_events ORDER BY id`);
   const outgoing = () => fake.msgs.filter((m) => m.message_type === 1 && !m.private);
-  return { advance, db, q, deps, config, fake, prompts, customer, human, drain, state, handoffs, outgoing };
+  return { advance, db, q, deps, conv, config, fake, prompts, customer, human, drain, state, handoffs, outgoing };
 }
 
 test('EV1: 3 mensagens em sequência + webhook duplicado = 1 resposta', async () => {
@@ -116,24 +117,32 @@ test('EV1: 3 mensagens em sequência + webhook duplicado = 1 resposta', async ()
   assert.ok((await s.state()).apresentou_em, 'marcou que já se apresentou');
 });
 
-test('EV2: humano responde = IA pausa e descarta a resposta da fila; nota privada não pausa', async () => {
+test('EV2: fala humana não pausa; a etiqueta ia-pausada pausa e removida retoma', async () => {
   const s = await setup();
   await s.customer('oi');
   assert.equal(await s.human('nota interna', true), 'ignorado');
+  assert.equal(await s.human('Oi, aqui é o Lorenzo'), 'humano');
   assert.equal((await s.state()).ia_pausada, false);
-  assert.equal(await s.human('Oi, aqui é o Lorenzo'), 'pausada');
-  await s.drain();
-  assert.equal(s.prompts.length, 0);
-  assert.equal(s.outgoing().length, 1);   // só a do humano
+  const labels = (ls: string[], k: string) => onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId },
+    { event: 'conversation_updated', account: { id: 1 }, id: CONV, labels: ls, updated_at: k });
+  assert.equal(await labels(['ia-pausada'], '1'), 'pausada');
+  assert.equal((await s.state()).ia_pausada, true);
   assert.equal(await s.customer('e aí?'), 'pausada');
+  assert.equal(await labels(['lead-quente'], '2'), 'retomada');
+  assert.equal((await s.state()).ia_pausada, false);
+  assert.equal(await s.customer('voltei'), 'agendada');
 });
 
-test('EV2b: humano escreve durante a geração = resposta descartada antes do envio', async () => {
+test('EV2b: etiqueta ia-pausada durante a geração descarta a resposta', async () => {
   const s = await setup();
   await s.customer('oi');
-  s.deps.chat = async () => { await s.human('deixa comigo'); return out({}); };
+  s.deps.chat = async () => {
+    await onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId },
+      { event: 'conversation_updated', account: { id: 1 }, id: CONV, labels: ['ia-pausada'], updated_at: '1' });
+    return out({});
+  };
   await s.drain();
-  assert.equal(s.outgoing().length, 1);   // só a do humano
+  assert.equal(s.outgoing().length, 0);
 });
 
 test('regra 1b: mensagem da própria IA não pausa', async () => {
@@ -193,18 +202,20 @@ test('lead quente (critério em código): transbordo para o Lorenzo uma vez, com
   await s.customer('quero fechar o armário para dezembro em Curitiba');
   await s.drain();
   assert.deepEqual((await s.handoffs()).map((h) => h.motivo), ['lead_quente']);
-  assert.equal((await s.state()).ia_pausada, true);
+  assert.equal((await s.state()).ia_pausada, false);
   assert.equal((await s.q(`SELECT estagio FROM leads`))[0].estagio, 'quente');
   const texts = s.outgoing().map((m) => m.content);
   assert.equal(texts.length, 1);
   assert.match(texts[0]!, /Lorenzo/);
   for (const c of ['open', 'assign:2', 'urgent', 'note']) assert.ok(s.fake.calls.includes(c), c);
   assert.ok(s.fake.calls.some((c) => c.includes('lead-quente')));
+  assert.ok(!s.fake.calls.some((c) => c.includes('ia-pausada')));
   assert.match(s.fake.msgs.find((m) => m.private)!.content!, /cidade: Curitiba/);
 
-  // nova mensagem do cliente não gera outro transbordo nem resposta
+  // a Malu segue; um segundo transbordo não abre
   await s.customer('e aí?'); await s.drain();
   assert.equal((await s.handoffs()).length, 1);
+  assert.ok(s.prompts.length >= 2);
   // 1ª resposta humana: para o SLA e vai para em_negociacao
   await s.human('Oi, sou o Lorenzo');
   assert.ok((await s.q(`SELECT primeira_resposta_em FROM handoff_events`))[0].primeira_resposta_em);
@@ -262,6 +273,24 @@ test('primeira fala: cliente já disse o móvel = apresentação e próxima perg
   assert.deepEqual(await s.handoffs(), []);
 });
 
+test('fora do escopo não transfere: a Malu explica e segue', async () => {
+  const s = await setup({ replies: [out({ decisao: 'transferir', motivo: 'pergunta_fora_do_escopo', resposta: 'A EBM faz armários sob medida para casa, em Brasília e região. Para o carro, não fazemos. Quer um armário de quarto?' })] });
+  await s.customer('Vocês fazem armário para carro?');
+  await s.drain();
+  assert.deepEqual(await s.handoffs(), []);
+  assert.equal((await s.state()).ia_pausada, false);
+  assert.match(s.outgoing().at(-1)!.content!, /casa/);
+  assert.match(s.prompts[0][0].content as string, /armário para carro/);
+});
+
+test('IA_ATIVA desliga todas as conversas sem reiniciar', async () => {
+  const s = await setup();
+  s.conv.iaLigada = () => false;
+  assert.equal(await s.customer('oi'), 'ia desligada');
+  await s.drain();
+  assert.equal(s.prompts.length, 0);
+});
+
 test('frase de pedido: transbordo imediato sem LLM', async () => {
   const s = await setup();
   assert.equal(await s.customer('Quero FALAR COM ATENDENTE por favor'), 'transbordo');
@@ -314,15 +343,14 @@ test('regra 4: 5xx no envio repete sem duplicar; esgotou = transbordo ia-falhou-
   assert.ok(s2.fake.calls.some((c) => c.includes('ia-falhou-envio')));
 });
 
-test('regra 7: conversa resolvida volta com IA ativa, mas lead quente continua pausado', async () => {
+test('regra 7: resolver não tira a pausa da etiqueta ia-pausada', async () => {
   const s = await setup();
-  await s.customer('oi'); await s.human('assumi');
-  const resolve = (k: string) => onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId }, { event: 'conversation_status_changed', account: { id: 1 }, id: CONV, status: 'resolved', updated_at: k });
-  await resolve('1');
-  assert.equal((await s.state()).ia_pausada, false);
-  await s.q(`UPDATE leads SET estagio = 'quente'`);
-  await s.human('assumi de novo');
-  await resolve('2');
+  await s.customer('oi');
+  await onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId },
+    { event: 'conversation_updated', account: { id: 1 }, id: CONV, labels: ['ia-pausada'], updated_at: '0' });
+  const resolve = () => onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId },
+    { event: 'conversation_status_changed', account: { id: 1 }, id: CONV, status: 'resolved', updated_at: '1' });
+  await resolve();
   assert.equal((await s.state()).ia_pausada, true);
 });
 
@@ -454,6 +482,8 @@ test('SLA: para na 1ª resposta humana pública; nota privada e mensagem da IA n
 test('mensagem de espera: cliente insiste depois de 15 min = 1 aviso; não pausa nem para o SLA', async () => {
   const s = await setup();
   await s.customer('falar com atendente'); await s.drain();
+  await onEvent({ db: s.db, cfg: s.config, tenantId: s.deps.tenantId },
+    { event: 'conversation_updated', account: { id: 1 }, id: CONV, labels: ['ia-pausada'], updated_at: 'p' });
   const antes = s.outgoing().length;
   await s.customer('alô?'); await s.drain();
   assert.equal(s.outgoing().length, antes, 'antes de 15 min, nenhum aviso');

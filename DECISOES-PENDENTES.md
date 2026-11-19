@@ -19,3 +19,12 @@ No turno 4 a Carla perguntou o preço. A Malu transferiu (`pedido_cliente`) e ai
 - `sinal_compra` só com intenção clara de fechar, proposta ou orçamento. Medidas, prazo ou "quanto custa" não bastam.
 - No máximo 3 frases. Se o corte tirar a pergunta, ela volta no lugar da última.
 - Fallback grátis só quando o principal responde 429 (`LLM_FALLBACK_*`). 500 não troca de modelo.
+
+## Controle da IA (teste ao vivo, 19/11)
+
+Leonardo para a IA sozinho. Aprovado na implementação. Não apagar esta seção.
+
+- `IA_PAUSAR_NO_TRANSBORDO=false` (padrão). Transbordo atribui ao Lorenzo, com nota e prioridade, sem a etiqueta `ia-pausada`. A Malu continua.
+- Etiqueta `ia-pausada` numa conversa pausa. Removida, retoma.
+- Botão no painel (`http://127.0.0.1:8081`) liga e desliga todas as conversas sem reiniciar. `IA_ATIVA=false` trava desligada.
+- Fora do escopo (armário para carro) não transfere. A Malu explica o que a EBM faz e segue.

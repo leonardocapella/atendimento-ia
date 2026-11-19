@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { systemPrompt, type Config } from './agent/config.ts';
 import { llmEnv, type Chat } from './agent/llm.ts';
 import type { Query } from './db.ts';
+import { iaAtiva, iaTravadaOff, readSwitch, writeSwitch } from './ia.ts';
 
 type Profile = { id: number; accounts: { id: number; role: string }[] };
 export type PanelDeps = {
@@ -85,6 +86,20 @@ export async function panel(app: FastifyInstance, deps: PanelDeps) {
   });
 
   app.post('/api/logout', async (_req, reply) => reply.header('set-cookie', setCookie('', 0)).send({ ok: true }));
+
+  app.get('/api/ia', { preHandler: auth(['admin', 'gestor', 'atendente']) }, async () => ({
+    ativa: iaAtiva(),
+    travada: iaTravadaOff(),
+    painel: readSwitch(),
+  }));
+
+  app.post('/api/ia', { preHandler: auth(['admin', 'gestor']) }, async (req, reply) => {
+    if (iaTravadaOff()) return reply.code(409).send({ erro: 'IA_ATIVA=false no ambiente trava a IA. Mude o env para religar.' });
+    const body = z.object({ ativa: z.boolean() }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ erro: 'mande { ativa: true | false }' });
+    writeSwitch(body.data.ativa);
+    return { ativa: iaAtiva() };
+  });
 
   app.get('/api/me', { preHandler: auth(['admin', 'gestor', 'atendente']) }, async (req) => {
     const s = (req as any).sessao as Session;

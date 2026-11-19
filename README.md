@@ -44,6 +44,8 @@ Siga [docs/DEPLOY.md](docs/DEPLOY.md) na ordem. Resumo:
 
 `LLM_APPROVED_FOR_PRODUCTION` fica `false` até escolher o modelo. Agente `live` não sobe sem isso.
 
+A Malu não para no transbordo. O Lorenzo recebe a conversa, a nota e a prioridade, e ela continua. Para parar: etiqueta `ia-pausada` na conversa (tirar a etiqueta retoma), o botão no painel em `http://127.0.0.1:8081`, ou `IA_ATIVA=false` no `.env`. `IA_PAUSAR_NO_TRANSBORDO=true` volta a pausar sozinha. Pedido fora do que a EBM faz (armário para carro) não transfere.
+
 ## O que ainda depende do Leonardo
 
 Lista fechada em [DECISOES-PENDENTES.md](DECISOES-PENDENTES.md): modelo de IA, 30 conversas do FabChat, número do gestor, healthchecks.io, Cloud API ou QR, ID do Lorenzo e textos reais do YAML.
