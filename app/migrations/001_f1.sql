@@ -13,11 +13,8 @@ CREATE TABLE users_map (
   tenant_id bigint NOT NULL REFERENCES tenants,
   chatwoot_user_id bigint NOT NULL,
   role text NOT NULL CHECK (role IN ('admin', 'gestor', 'atendente')),
-  telegram_chat_id_enc bytea,
-  key_version int,
   horario jsonb NOT NULL DEFAULT '{}',   -- {"seg": [["09:00","18:00"]], ...}
-  PRIMARY KEY (tenant_id, chatwoot_user_id),
-  CHECK ((telegram_chat_id_enc IS NULL) = (key_version IS NULL))
+  PRIMARY KEY (tenant_id, chatwoot_user_id)
 );
 
 -- Estágios: mesma lista do enum STAGES em src/db.ts (o teste confere).
