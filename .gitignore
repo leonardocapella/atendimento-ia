@@ -1,0 +1,6 @@
+node_modules/
+.env
+exemplos-erros/
+ebm-config/
+.gstack/
+backups/

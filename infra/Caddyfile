@@ -1,0 +1,10 @@
+{$CHATWOOT_HOST} {
+	reverse_proxy chatwoot:3000
+}
+
+{$PAINEL_HOST} {
+	# Webhooks internos (/hooks/*) NÃO são expostos: o Chatwoot chama o app pela rede do compose.
+	@internal path /hooks/*
+	respond @internal 404
+	reverse_proxy api:8080
+}

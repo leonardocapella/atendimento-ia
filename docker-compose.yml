@@ -1,0 +1,120 @@
+# Subir: docker compose up -d   |   com WhatsApp QR: docker compose --profile qr up -d
+x-chatwoot: &chatwoot
+  image: chatwoot/chatwoot:v4.1.0   # ponytail: versão fixa; atualize lendo o changelog do Chatwoot
+  env_file: .env
+  environment: &chatwoot-env
+    RAILS_ENV: production
+    NODE_ENV: production
+    INSTALLATION_ENV: docker
+    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?defina no .env}
+    FRONTEND_URL: https://${CHATWOOT_HOST}
+    POSTGRES_HOST: postgres
+    POSTGRES_USERNAME: postgres
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+    POSTGRES_DATABASE: chatwoot
+    REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    ENABLE_ACCOUNT_SIGNUP: "false"
+    MAILER_SENDER_EMAIL: atendimento@${DOMAIN}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
+
+x-app: &app
+  build: ./app
+  image: atendimento-ia-app:local
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/brain
+    REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+    CHATWOOT_URL: http://chatwoot:3000
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+      POSTGRES_DB: chatwoot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?defina no .env}", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    restart: unless-stopped
+
+  chatwoot-migrate:
+    <<: *chatwoot
+    command: ["bundle", "exec", "rails", "db:chatwoot_prepare"]
+    restart: "no"
+
+  chatwoot:
+    <<: *chatwoot
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    entrypoint: docker/entrypoints/rails.sh
+    volumes: [chatwoot-storage:/app/storage]
+    depends_on:
+      chatwoot-migrate: { condition: service_completed_successfully }
+
+  sidekiq:
+    <<: *chatwoot
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    volumes: [chatwoot-storage:/app/storage]
+    depends_on:
+      chatwoot-migrate: { condition: service_completed_successfully }
+
+  api:
+    <<: *app
+    command: ["node", "src/server.ts"]
+
+  worker:
+    <<: *app
+    command: ["node", "src/worker.ts"]
+
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    env_file: .env
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [chatwoot, api]
+    restart: unless-stopped
+
+  evolution:
+    profiles: [qr]   # opcional: WhatsApp via QR (risco de banimento — ver README)
+    image: atendai/evolution-api:v2.2.3
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env para usar o profile qr}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/chatwoot?schema=evolution
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/2
+      CHATWOOT_ENABLED: "true"
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+    # sem "ports": não exposto publicamente; o Chatwoot fala com ele pela rede interna
+
+volumes:
+  pgdata:
+  redisdata:
+  chatwoot-storage:
+  caddydata:
