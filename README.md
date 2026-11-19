@@ -2,7 +2,7 @@
 
 Substituto self-hosted do FabChat: o **Chatwoot CE** cuida da inbox, dos canais, dos atendentes e das notificações; um **app próprio** (Node/TS: API + worker) é o agente de IA que qualifica o lead e passa o lead quente para o vendedor humano, com SLA.
 
-Status: **F1 em andamento** (T2 banco, T3 config + painel e T4 motor de conversa e T5 SLA prontos; falta T6 evals, T7 replay, T9 Telegram, T10 backup). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
+Status: **F1 em andamento** (T2–T5 prontos; T6 evals e T7 replay com fixtures fictícias, esperando as 30 conversas do FabChat; T8 CI, T9 Telegram e T10 monitor/backup no repo). O agente entra no F1. Plano completo: design doc aprovado (`~/.gstack/projects/atendimento-ia/`).
 
 ## Arquitetura
 
@@ -43,9 +43,9 @@ docker compose logs -f chatwoot  # aguarde "Listening on http://0.0.0.0:3000"
 2. No `.env`: `DOMAIN`, `CHATWOOT_HOST`, `PAINEL_HOST` com os domínios reais; segredos fortes.
 3. **Antes de liberar o DNS/porta 443**, rode `docker compose up -d --build` e faça a 1ª configuração por túnel SSH: `ssh -L 3000:127.0.0.1:3000 usuario@vps` e abra http://localhost:3000. O Caddy emite TLS (Let's Encrypt) sozinho.
 4. Firewall: libere só as portas 80/443 (e 22). Postgres, Redis, app e Evolution não são publicados.
-5. **Backup** (fora da VPS: outro servidor, nuvem ou seu computador; o T10 automatiza):
+5. **Backup** (fora da VPS: outro servidor, nuvem ou seu computador):
    - `MASTER_KEY` e o `.env` inteiro: guarde uma cópia offline.
-   - Postgres: `docker compose exec -T postgres pg_dumpall -U postgres | gzip > backups/$(date +%F).sql.gz`
+   - Postgres: `./ops/backup.sh` (cron diário na VPS). Teste: `./ops/backup.sh --restore-test backups/AAAA-MM-DD.sql.gz`.
    - Mídias do Chatwoot: `docker run --rm -v atendimento-ia_chatwoot-storage:/s -v $PWD/backups:/b alpine tar czf /b/storage-$(date +%F).tgz -C /s .`
    - Teste o restore pelo menos uma vez. O `init.sh` do Postgres só roda em volume vazio; um restore via `pg_dumpall` recria os bancos e os usuários.
 6. Logs dos containers têm limite (10 MB × 3 por serviço), para o disco não encher.

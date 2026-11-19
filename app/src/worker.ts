@@ -10,6 +10,7 @@ import { inHours, nextOpen } from './hours.ts';
 export { inHours };
 import type { Chat } from './agent/llm.ts';
 import { alertFromEnv, type Alert } from './alert.ts';
+import { ping } from './monitor.ts';
 import type { Db } from './db.ts';
 
 export type WorkerDeps = {
@@ -352,7 +353,10 @@ if (import.meta.main) {
   while (running) {
     const jobs = await claim(db).catch((e) => (log.error({ err: e.message }, 'claim falhou'), []));
     await Promise.all(jobs.map((t) => runJob(deps, t)));
-    if (!jobs.length) await sleep(1000);
+    if (!jobs.length) {
+      await ping(process.env.HEALTHCHECK_URL ?? '');
+      await sleep(1000);
+    }
   }
   await pool.end();
 }
